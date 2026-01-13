@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    environment:
+      POSTGRES_DB: barbersaas_db
+      POSTGRES_USER: barbersaas_user
+      POSTGRES_PASSWORD: barbersaas_password
+
+    ports:
+      - '5432:5432'
+
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
