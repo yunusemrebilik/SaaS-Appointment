@@ -1,145 +1,130 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db/db';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import { createSafeAction, ok, err } from '@/lib/safe-action';
 import { Selectable } from 'kysely';
 import { BannedCustomers } from '@/types/db';
 
-async function getSessionInfo() {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
-
-  if (!session?.session.activeOrganizationId || !session?.user?.id) {
-    throw new Error('Not authenticated');
-  }
-
-  const members = await auth.api.listMembers({
-    headers: requestHeaders,
-    query: { organizationId: session.session.activeOrganizationId },
-  });
-
-  const currentMember = members?.members?.find(
-    (m: { userId: string }) => m.userId === session.user.id
-  );
-
-  return {
-    organizationId: session.session.activeOrganizationId,
-    userId: session.user.id,
-    role: (currentMember?.role as 'owner' | 'admin' | 'member') || null,
-  };
-}
-
 export type BannedCustomer = Selectable<BannedCustomers>;
 
-export async function getBannedCustomers(): Promise<BannedCustomer[]> {
-  const { organizationId, role } = await getSessionInfo();
+// ============ Schemas ============
 
-  // Only owner/admin can view banned customers
-  if (role !== 'owner' && role !== 'admin') {
-    throw new Error('Not authorized');
-  }
+const banCustomerSchema = z.object({
+  customerPhone: z.string().min(6, 'Phone number is required'),
+  reason: z.string().optional(),
+  bannedUntil: z.date().nullable().optional(),
+});
 
-  const banned = await db
-    .selectFrom('bannedCustomers')
-    .selectAll()
-    .where('organizationId', '=', organizationId)
-    .orderBy('bannedAt', 'desc')
-    .execute();
+const unbanCustomerSchema = z.object({
+  id: z.uuid(),
+});
 
-  return banned;
-}
+const isCustomerBannedSchema = z.object({
+  organizationId: z.uuid(),
+  customerPhone: z.string(),
+});
 
-export async function banCustomer(data: {
-  customerPhone: string;
-  reason?: string;
-  bannedUntil?: Date | null;
-}) {
-  const { organizationId, role } = await getSessionInfo();
+// ============ Read Operations ============
 
-  if (role !== 'owner' && role !== 'admin') {
-    throw new Error('Not authorized');
-  }
-
-  // Check if already banned
-  const existing = await db
-    .selectFrom('bannedCustomers')
-    .select(['id'])
-    .where('organizationId', '=', organizationId)
-    .where('customerPhone', '=', data.customerPhone)
-    .executeTakeFirst();
-
-  if (existing) {
-    // Update existing ban
-    await db
-      .updateTable('bannedCustomers')
-      .set({
-        reason: data.reason || null,
-        bannedUntil: data.bannedUntil || null,
-        bannedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where('id', '=', existing.id)
+export const getBannedCustomers = createSafeAction({
+  requireRole: ['owner', 'admin'],
+  handler: async ({ ctx }) => {
+    const banned = await db
+      .selectFrom('bannedCustomers')
+      .selectAll()
+      .where('organizationId', '=', ctx.organizationId)
+      .orderBy('bannedAt', 'desc')
       .execute();
-  } else {
-    // Create new ban
+
+    return ok(banned as BannedCustomer[]);
+  },
+});
+
+export const isCustomerBanned = createSafeAction({
+  schema: isCustomerBannedSchema,
+  requireAuth: false, // This is called from public booking pages
+  handler: async ({ data }) => {
+    const ban = await db
+      .selectFrom('bannedCustomers')
+      .select(['reason', 'bannedUntil'])
+      .where('organizationId', '=', data.organizationId)
+      .where('customerPhone', '=', data.customerPhone)
+      .executeTakeFirst();
+
+    if (!ban) {
+      return ok({ banned: false });
+    }
+
+    // Check if ban has expired
+    if (ban.bannedUntil && new Date(ban.bannedUntil) < new Date()) {
+      return ok({ banned: false });
+    }
+
+    return ok({
+      banned: true,
+      reason: ban.reason || undefined,
+      bannedUntil: ban.bannedUntil,
+    });
+  },
+});
+
+// ============ Write Operations ============
+
+export const banCustomer = createSafeAction({
+  schema: banCustomerSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
+    // Check if already banned
+    const existing = await db
+      .selectFrom('bannedCustomers')
+      .select(['id'])
+      .where('organizationId', '=', ctx.organizationId)
+      .where('customerPhone', '=', data.customerPhone)
+      .executeTakeFirst();
+
+    if (existing) {
+      // Update existing ban
+      await db
+        .updateTable('bannedCustomers')
+        .set({
+          reason: data.reason || null,
+          bannedUntil: data.bannedUntil || null,
+          bannedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where('id', '=', existing.id)
+        .execute();
+    } else {
+      // Create new ban
+      await db
+        .insertInto('bannedCustomers')
+        .values({
+          organizationId: ctx.organizationId,
+          customerPhone: data.customerPhone,
+          reason: data.reason || null,
+          bannedUntil: data.bannedUntil || null,
+        })
+        .execute();
+    }
+
+    revalidatePath('/dashboard/owner/customers');
+    return ok({ success: true });
+  },
+});
+
+export const unbanCustomer = createSafeAction({
+  schema: unbanCustomerSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
     await db
-      .insertInto('bannedCustomers')
-      .values({
-        organizationId,
-        customerPhone: data.customerPhone,
-        reason: data.reason || null,
-        bannedUntil: data.bannedUntil || null,
-      })
+      .deleteFrom('bannedCustomers')
+      .where('id', '=', data.id)
+      .where('organizationId', '=', ctx.organizationId)
       .execute();
-  }
 
-  revalidatePath('/dashboard/owner/customers');
-  return { success: true };
-}
-
-export async function unbanCustomer(id: string) {
-  const { organizationId, role } = await getSessionInfo();
-
-  if (role !== 'owner' && role !== 'admin') {
-    throw new Error('Not authorized');
-  }
-
-  await db
-    .deleteFrom('bannedCustomers')
-    .where('id', '=', id)
-    .where('organizationId', '=', organizationId)
-    .execute();
-
-  revalidatePath('/dashboard/owner/customers');
-  return { success: true };
-}
-
-// Check if a phone number is banned (for use in booking flow)
-export async function isCustomerBanned(
-  organizationId: string,
-  customerPhone: string
-): Promise<{ banned: boolean; reason?: string; bannedUntil?: Date | null }> {
-  const ban = await db
-    .selectFrom('bannedCustomers')
-    .select(['reason', 'bannedUntil'])
-    .where('organizationId', '=', organizationId)
-    .where('customerPhone', '=', customerPhone)
-    .executeTakeFirst();
-
-  if (!ban) {
-    return { banned: false };
-  }
-
-  // Check if ban has expired
-  if (ban.bannedUntil && new Date(ban.bannedUntil) < new Date()) {
-    return { banned: false };
-  }
-
-  return {
-    banned: true,
-    reason: ban.reason || undefined,
-    bannedUntil: ban.bannedUntil,
-  };
-}
+    revalidatePath('/dashboard/owner/customers');
+    return ok({ success: true });
+  },
+});

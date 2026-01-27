@@ -4,11 +4,13 @@ import { ProfileForm } from './components/ProfileForm';
 import { PasswordForm } from './components/PasswordForm';
 
 export default async function ProfilePage() {
-  const profile = await getProfile();
+  const result = await getProfile({});
 
-  if (!profile) {
+  if (!result.success || !result.data) {
     redirect('/login');
   }
+
+  const profile = result.data;
 
   return (
     <div className="space-y-6">

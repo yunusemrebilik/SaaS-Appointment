@@ -19,14 +19,15 @@ export function BannedCustomersList({ bannedCustomers }: BannedCustomersListProp
       return;
     }
 
-    try {
-      await unbanCustomer(id);
-      toast.success('Customer unbanned successfully');
-      router.refresh();
-    } catch (error) {
-      console.error('Error unbanning customer:', error);
-      toast.error('Failed to unban customer');
+    const result = await unbanCustomer({ id });
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    toast.success('Customer unbanned successfully');
+    router.refresh();
   }
 
   if (bannedCustomers.length === 0) {

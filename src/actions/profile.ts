@@ -1,63 +1,72 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db/db';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import { createSafeAction, ok, err } from '@/lib/safe-action';
 
-async function getCurrentUser() {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
+// ============ Schemas ============
 
-  if (!session?.user?.id) {
-    throw new Error('Not authenticated');
-  }
+const updateProfileSchema = z.object({
+  name: z.string().min(2, 'Name must be at least 2 characters').max(100),
+});
 
-  return session.user;
-}
+const updateProfileImageSchema = z.object({
+  imageUrl: z.string().url().nullable(),
+});
 
-export async function getProfile() {
-  const user = await getCurrentUser();
+// ============ Read Operations ============
 
-  const profile = await db
-    .selectFrom('users')
-    .select(['id', 'name', 'email', 'image', 'createdAt'])
-    .where('id', '=', user.id)
-    .executeTakeFirst();
+export const getProfile = createSafeAction({
+  handler: async ({ ctx }) => {
+    const profile = await db
+      .selectFrom('users')
+      .select(['id', 'name', 'email', 'image', 'createdAt'])
+      .where('id', '=', ctx.userId)
+      .executeTakeFirst();
 
-  return profile;
-}
+    if (!profile) {
+      return err('Profile not found', 'NOT_FOUND');
+    }
 
-export async function updateProfile(data: { name: string }) {
-  const user = await getCurrentUser();
+    return ok(profile);
+  },
+});
 
-  await db
-    .updateTable('users')
-    .set({
-      name: data.name,
-      updatedAt: new Date(),
-    })
-    .where('id', '=', user.id)
-    .execute();
+// ============ Write Operations ============
 
-  revalidatePath('/dashboard/profile');
-  revalidatePath('/dashboard');
-  return { success: true };
-}
+export const updateProfile = createSafeAction({
+  schema: updateProfileSchema,
+  handler: async ({ data, ctx }) => {
+    await db
+      .updateTable('users')
+      .set({
+        name: data.name,
+        updatedAt: new Date(),
+      })
+      .where('id', '=', ctx.userId)
+      .execute();
 
-export async function updateProfileImage(imageUrl: string | null) {
-  const user = await getCurrentUser();
+    revalidatePath('/dashboard/profile');
+    revalidatePath('/dashboard');
+    return ok({ success: true });
+  },
+});
 
-  await db
-    .updateTable('users')
-    .set({
-      image: imageUrl,
-      updatedAt: new Date(),
-    })
-    .where('id', '=', user.id)
-    .execute();
+export const updateProfileImage = createSafeAction({
+  schema: updateProfileImageSchema,
+  handler: async ({ data, ctx }) => {
+    await db
+      .updateTable('users')
+      .set({
+        image: data.imageUrl,
+        updatedAt: new Date(),
+      })
+      .where('id', '=', ctx.userId)
+      .execute();
 
-  revalidatePath('/dashboard/profile');
-  revalidatePath('/dashboard');
-  return { success: true };
-}
+    revalidatePath('/dashboard/profile');
+    revalidatePath('/dashboard');
+    return ok({ success: true });
+  },
+});

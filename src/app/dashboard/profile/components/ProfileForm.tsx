@@ -57,15 +57,16 @@ export function ProfileForm({ profile }: ProfileFormProps) {
   }
 
   async function handleRemoveImage() {
-    try {
-      await updateProfileImage(null);
-      setImageUrl(null);
-      toast.success('Profile picture removed');
-      router.refresh();
-    } catch (error) {
-      console.error('Error removing image:', error);
-      toast.error('Failed to remove image');
+    const result = await updateProfileImage({ imageUrl: null });
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    setImageUrl(null);
+    toast.success('Profile picture removed');
+    router.refresh();
   }
 
   return (
@@ -102,14 +103,15 @@ export function ProfileForm({ profile }: ProfileFormProps) {
                 if (res?.[0]?.ufsUrl) {
                   const newImageUrl = res[0].ufsUrl;
                   setImageUrl(newImageUrl);
-                  try {
-                    await updateProfileImage(newImageUrl);
-                    toast.success('Profile picture updated!');
-                    router.refresh();
-                  } catch (error) {
-                    console.error('Error saving image:', error);
-                    toast.error('Failed to save profile picture');
+                  const result = await updateProfileImage({ imageUrl: newImageUrl });
+
+                  if (!result.success) {
+                    toast.error(result.error);
+                    return;
                   }
+
+                  toast.success('Profile picture updated!');
+                  router.refresh();
                 }
               }}
               onUploadError={(error: Error) => {

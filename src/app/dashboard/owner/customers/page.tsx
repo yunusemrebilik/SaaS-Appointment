@@ -3,7 +3,11 @@ import { BannedCustomersList } from './components/BannedCustomersList';
 import { BanCustomerButton } from './components/BanCustomerButton';
 
 export default async function CustomersPage() {
-  const bannedCustomers = await getBannedCustomers();
+  const result = await getBannedCustomers({});
+
+  if (!result.success) {
+    return <div className="p-4 text-destructive">{result.error}</div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -24,7 +28,7 @@ export default async function CustomersPage() {
             Customers who are currently banned from making bookings.
           </p>
         </div>
-        <BannedCustomersList bannedCustomers={bannedCustomers} />
+        <BannedCustomersList bannedCustomers={result.data} />
       </div>
     </div>
   );
