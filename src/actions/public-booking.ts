@@ -310,50 +310,40 @@ export async function createPublicBooking(params: CreateBookingParams): Promise<
     }
   }
 
-  // Double-check the slot is still available (race condition protection)
-  const dayStart = new Date(startTime);
-  dayStart.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(startTime);
-  dayEnd.setHours(23, 59, 59, 999);
+  // Create the booking - the Postgres EXCLUDE constraint prevents double-bookings
+  try {
+    const booking = await db
+      .insertInto('bookings')
+      .values({
+        organizationId,
+        serviceId,
+        memberId,
+        startTime,
+        endTime,
+        customerName,
+        customerPhone,
+        notes: notes || null,
+        priceAtBooking: service.priceCents,
+        status: 'pending',
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
 
-  const existingBookings = await db
-    .selectFrom('bookings')
-    .select(['id'])
-    .where('memberId', '=', memberId)
-    .where('startTime', '<', endTime)
-    .where('endTime', '>', startTime)
-    .where('status', 'in', ['pending', 'confirmed'] as BookingStatus[])
-    .executeTakeFirst();
-
-  if (existingBookings) {
-    return { success: false, error: 'This time slot is no longer available. Please choose another time.' };
+    return {
+      success: true,
+      booking: booking as Booking,
+      service: {
+        name: service.name,
+        durationMin: service.durationMin,
+        priceCents: service.priceCents,
+      },
+    };
+  } catch (error: unknown) {
+    // Handle the exclusion constraint violation (overlapping bookings)
+    if (error instanceof Error && error.message.includes('no_overlapping_bookings')) {
+      return { success: false, error: 'This time slot is no longer available. Please choose another time.' };
+    }
+    // Re-throw unexpected errors
+    throw error;
   }
-
-  // Create the booking
-  const booking = await db
-    .insertInto('bookings')
-    .values({
-      organizationId,
-      serviceId,
-      memberId,
-      startTime,
-      endTime,
-      customerName,
-      customerPhone,
-      notes: notes || null,
-      priceAtBooking: service.priceCents,
-      status: 'pending',
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow();
-
-  return {
-    success: true,
-    booking: booking as Booking,
-    service: {
-      name: service.name,
-      durationMin: service.durationMin,
-      priceCents: service.priceCents,
-    },
-  };
 }
