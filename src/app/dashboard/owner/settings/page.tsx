@@ -3,9 +3,9 @@ import { redirect } from 'next/navigation';
 import { SettingsForm } from './components/SettingsForm';
 
 export default async function SettingsPage() {
-  const organization = await getOrganizationSettings();
+  const result = await getOrganizationSettings({});
 
-  if (!organization) {
+  if (!result.success || !result.data) {
     redirect('/dashboard');
   }
 
@@ -20,7 +20,7 @@ export default async function SettingsPage() {
 
       <div className="rounded-lg border bg-card p-6 shadow-sm">
         <h2 className="text-lg font-semibold mb-4">Shop Profile</h2>
-        <SettingsForm organization={organization} />
+        <SettingsForm organization={result.data} />
       </div>
     </div>
   );

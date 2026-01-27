@@ -1,65 +1,72 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db/db';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import { createSafeAction, ok, err } from '@/lib/safe-action';
 
-async function getActiveOrganizationId(): Promise<string> {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
+// ============ Schemas ============
 
-  if (!session?.session.activeOrganizationId) {
-    throw new Error('No active organization');
-  }
+const updateOrganizationSettingsSchema = z.object({
+  name: z.string().min(2, 'Name must be at least 2 characters').max(100),
+  slug: z.string().min(2, 'Slug must be at least 2 characters').max(50).regex(/^[a-z0-9-]+$/, 'Slug must only contain lowercase letters, numbers, and hyphens'),
+  logo: z.string().url().nullable().optional(),
+});
 
-  return session.session.activeOrganizationId;
-}
+// ============ Read Operations ============
 
-export async function getOrganizationSettings() {
-  const organizationId = await getActiveOrganizationId();
+export const getOrganizationSettings = createSafeAction({
+  handler: async ({ ctx }) => {
+    const organization = await db
+      .selectFrom('organizations')
+      .selectAll()
+      .where('id', '=', ctx.organizationId)
+      .executeTakeFirst();
 
-  const organization = await db
-    .selectFrom('organizations')
-    .selectAll()
-    .where('id', '=', organizationId)
-    .executeTakeFirst();
+    if (!organization) {
+      return err('Organization not found', 'NOT_FOUND');
+    }
 
-  return organization;
-}
+    return ok(organization);
+  },
+});
 
-export async function updateOrganizationSettings(data: {
-  name: string;
-  slug: string;
-  logo?: string | null;
-}) {
-  const organizationId = await getActiveOrganizationId();
+// ============ Write Operations ============
 
-  // Check if slug is already taken by another org
-  const existingOrg = await db
-    .selectFrom('organizations')
-    .select(['id'])
-    .where('slug', '=', data.slug)
-    .where('id', '!=', organizationId)
-    .executeTakeFirst();
+export const updateOrganizationSettings = createSafeAction({
+  schema: updateOrganizationSettingsSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
+    // Check if slug is already taken by another org
+    const existingOrg = await db
+      .selectFrom('organizations')
+      .select(['id'])
+      .where('slug', '=', data.slug)
+      .where('id', '!=', ctx.organizationId)
+      .executeTakeFirst();
 
-  if (existingOrg) {
-    throw new Error('This URL slug is already taken. Please choose another.');
-  }
+    if (existingOrg) {
+      return err('This URL slug is already taken. Please choose another.', 'SLUG_TAKEN');
+    }
 
-  const result = await db
-    .updateTable('organizations')
-    .set({
-      name: data.name,
-      slug: data.slug,
-      logo: data.logo,
-      updatedAt: new Date(),
-    })
-    .where('id', '=', organizationId)
-    .returningAll()
-    .executeTakeFirst();
+    const result = await db
+      .updateTable('organizations')
+      .set({
+        name: data.name,
+        slug: data.slug,
+        logo: data.logo ?? undefined,
+        updatedAt: new Date(),
+      })
+      .where('id', '=', ctx.organizationId)
+      .returningAll()
+      .executeTakeFirst();
 
-  revalidatePath('/dashboard/owner/settings');
-  revalidatePath('/dashboard');
-  return result;
-}
+    if (!result) {
+      return err('Organization not found', 'NOT_FOUND');
+    }
+
+    revalidatePath('/dashboard/owner/settings');
+    revalidatePath('/dashboard');
+    return ok(result);
+  },
+});
