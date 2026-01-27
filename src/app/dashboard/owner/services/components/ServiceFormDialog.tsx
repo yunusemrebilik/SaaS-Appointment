@@ -56,23 +56,22 @@ export function ServiceFormDialog({
 
   async function onSubmit(data: ServiceFormData) {
     setLoading(true);
-    try {
-      if (isEditing && service) {
-        await updateService(service.id, data);
-        toast.success('Service updated successfully');
-      } else {
-        await createService(data);
-        toast.success('Service created successfully');
-      }
-      onOpenChange(false);
-      form.reset();
-      router.refresh();
-    } catch (error) {
-      console.error('Error saving service:', error);
-      toast.error('Failed to save service');
-    } finally {
-      setLoading(false);
+
+    const result = isEditing && service
+      ? await updateService({ id: service.id, data })
+      : await createService(data);
+
+    setLoading(false);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    toast.success(isEditing ? 'Service updated successfully' : 'Service created successfully');
+    onOpenChange(false);
+    form.reset();
+    router.refresh();
   }
 
   return (

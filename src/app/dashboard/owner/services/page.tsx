@@ -3,7 +3,16 @@ import { ServicesList } from './components/ServicesList';
 import { AddServiceButton } from './components/AddServiceButton';
 
 export default async function ServicesPage() {
-  const services = await getServices();
+  const result = await getServices({});
+
+  if (!result.success) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold tracking-tight">Services</h1>
+        <p className="text-destructive">{result.error}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -17,7 +26,7 @@ export default async function ServicesPage() {
         <AddServiceButton />
       </div>
 
-      <ServicesList services={services} />
+      <ServicesList services={result.data} />
     </div>
   );
 }

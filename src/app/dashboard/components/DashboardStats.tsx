@@ -4,11 +4,13 @@ import { getStaffCount } from '@/actions/member-services';
 import { CalendarDays, Clock, Scissors, Users } from 'lucide-react';
 
 export async function DashboardStats() {
-  const [bookingStats, serviceCount, staffCount] = await Promise.all([
+  const [bookingStats, serviceCountResult, staffCount] = await Promise.all([
     getBookingStats(),
-    getServiceCount(),
+    getServiceCount({}),
     getStaffCount(),
   ]);
+
+  const serviceCount = serviceCountResult.success ? serviceCountResult.data : 0;
 
   const stats = [
     {

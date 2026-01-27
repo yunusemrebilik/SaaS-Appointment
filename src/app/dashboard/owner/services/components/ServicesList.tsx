@@ -31,16 +31,16 @@ export function ServicesList({ services }: ServicesListProps) {
     if (!confirm('Are you sure you want to delete this service?')) return;
 
     setDeletingId(id);
-    try {
-      await deleteService(id);
-      toast.success('Service deleted');
-      router.refresh();
-    } catch (error) {
-      console.error('Error deleting service:', error);
-      toast.error('Failed to delete service');
-    } finally {
-      setDeletingId(null);
+    const result = await deleteService({ id });
+    setDeletingId(null);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    toast.success('Service deleted');
+    router.refresh();
   }
 
   if (services.length === 0) {

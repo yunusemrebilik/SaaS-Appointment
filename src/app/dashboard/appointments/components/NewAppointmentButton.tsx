@@ -74,9 +74,11 @@ export function NewAppointmentButton() {
   // Load data when dialog opens
   React.useEffect(() => {
     if (open) {
-      Promise.all([getServices(), getStaffForAppointmentForm()]).then(
-        ([servicesData, staffData]) => {
-          setServices(servicesData as Service[]);
+      Promise.all([getServices({}), getStaffForAppointmentForm()]).then(
+        ([servicesResult, staffData]) => {
+          if (servicesResult.success) {
+            setServices(servicesResult.data as Service[]);
+          }
           setStaff(staffData);
         }
       );

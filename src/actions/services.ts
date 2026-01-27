@@ -1,124 +1,140 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db/db';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import { createSafeAction, ok, err, type ActionResult } from '@/lib/safe-action';
 import { serviceFormSchema, type ServiceFormData } from '@/schemas/service.schema';
+import type { Service } from '@/schemas/service.schema';
 
-async function getActiveOrganizationId(): Promise<string> {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
+// ============ Read Operations ============
 
-  if (!session?.session.activeOrganizationId) {
-    throw new Error('No active organization');
-  }
+export const getServices = createSafeAction({
+  handler: async ({ ctx }) => {
+    const services = await db
+      .selectFrom('services')
+      .selectAll()
+      .where('organizationId', '=', ctx.organizationId)
+      .where('isActive', '=', true)
+      .orderBy('name', 'asc')
+      .execute();
 
-  return session.session.activeOrganizationId;
-}
+    return ok(services as Service[]);
+  },
+});
 
-export async function getServices() {
-  const organizationId = await getActiveOrganizationId();
+export const getServiceCount = createSafeAction({
+  handler: async ({ ctx }) => {
+    const result = await db
+      .selectFrom('services')
+      .select(db.fn.count<number>('id').as('count'))
+      .where('organizationId', '=', ctx.organizationId)
+      .where('isActive', '=', true)
+      .executeTakeFirst();
 
-  const services = await db
-    .selectFrom('services')
-    .selectAll()
-    .where('organizationId', '=', organizationId)
-    .where('isActive', '=', true)
-    .orderBy('name', 'asc')
-    .execute();
+    return ok(Number(result?.count || 0));
+  },
+});
 
-  return services;
-}
+const getServiceByIdSchema = z.object({ id: z.string().uuid() });
 
-export async function getServiceCount() {
-  const organizationId = await getActiveOrganizationId();
+export const getServiceById = createSafeAction({
+  schema: getServiceByIdSchema,
+  handler: async ({ data, ctx }) => {
+    const service = await db
+      .selectFrom('services')
+      .selectAll()
+      .where('id', '=', data.id)
+      .where('organizationId', '=', ctx.organizationId)
+      .executeTakeFirst();
 
-  const result = await db
-    .selectFrom('services')
-    .select(db.fn.count<number>('id').as('count'))
-    .where('organizationId', '=', organizationId)
-    .where('isActive', '=', true)
-    .executeTakeFirst();
+    if (!service) {
+      return err('Service not found', 'NOT_FOUND');
+    }
 
-  return Number(result?.count || 0);
-}
+    return ok(service as Service);
+  },
+});
 
-export async function getServiceById(id: string) {
-  const organizationId = await getActiveOrganizationId();
+// ============ Write Operations ============
 
-  const service = await db
-    .selectFrom('services')
-    .selectAll()
-    .where('id', '=', id)
-    .where('organizationId', '=', organizationId)
-    .executeTakeFirst();
+export const createService = createSafeAction({
+  schema: serviceFormSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
+    const result = await db
+      .insertInto('services')
+      .values({
+        organizationId: ctx.organizationId,
+        name: data.name,
+        description: data.description || null,
+        durationMin: data.durationMin,
+        priceCents: data.priceCents,
+        isActive: true,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
 
-  return service;
-}
+    revalidatePath('/dashboard/owner/services');
+    return ok(result as Service);
+  },
+});
 
-export async function createService(data: ServiceFormData) {
-  const organizationId = await getActiveOrganizationId();
+const updateServiceSchema = z.object({
+  id: z.string().uuid(),
+  data: serviceFormSchema,
+});
 
-  // Validate input
-  const validated = serviceFormSchema.parse(data);
+export const updateService = createSafeAction({
+  schema: updateServiceSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
+    const result = await db
+      .updateTable('services')
+      .set({
+        name: data.data.name,
+        description: data.data.description || null,
+        durationMin: data.data.durationMin,
+        priceCents: data.data.priceCents,
+        updatedAt: new Date(),
+      })
+      .where('id', '=', data.id)
+      .where('organizationId', '=', ctx.organizationId)
+      .returningAll()
+      .executeTakeFirst();
 
-  const result = await db
-    .insertInto('services')
-    .values({
-      organizationId,
-      name: validated.name,
-      description: validated.description || null,
-      durationMin: validated.durationMin,
-      priceCents: validated.priceCents,
-      isActive: true,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow();
+    if (!result) {
+      return err('Service not found', 'NOT_FOUND');
+    }
 
-  revalidatePath('/dashboard/owner/services');
-  return result;
-}
+    revalidatePath('/dashboard/owner/services');
+    return ok(result as Service);
+  },
+});
 
-export async function updateService(id: string, data: ServiceFormData) {
-  const organizationId = await getActiveOrganizationId();
+const deleteServiceSchema = z.object({ id: z.string().uuid() });
 
-  // Validate input
-  const validated = serviceFormSchema.parse(data);
+export const deleteService = createSafeAction({
+  schema: deleteServiceSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
+    // Soft delete - just mark as inactive
+    const result = await db
+      .updateTable('services')
+      .set({
+        isActive: false,
+        updatedAt: new Date(),
+      })
+      .where('id', '=', data.id)
+      .where('organizationId', '=', ctx.organizationId)
+      .returningAll()
+      .executeTakeFirst();
 
-  const result = await db
-    .updateTable('services')
-    .set({
-      name: validated.name,
-      description: validated.description || null,
-      durationMin: validated.durationMin,
-      priceCents: validated.priceCents,
-      updatedAt: new Date(),
-    })
-    .where('id', '=', id)
-    .where('organizationId', '=', organizationId)
-    .returningAll()
-    .executeTakeFirst();
+    if (!result) {
+      return err('Service not found', 'NOT_FOUND');
+    }
 
-  revalidatePath('/dashboard/owner/services');
-  return result;
-}
-
-export async function deleteService(id: string) {
-  const organizationId = await getActiveOrganizationId();
-
-  // Soft delete - just mark as inactive
-  const result = await db
-    .updateTable('services')
-    .set({
-      isActive: false,
-      updatedAt: new Date(),
-    })
-    .where('id', '=', id)
-    .where('organizationId', '=', organizationId)
-    .returningAll()
-    .executeTakeFirst();
-
-  revalidatePath('/dashboard/owner/services');
-  return result;
-}
+    revalidatePath('/dashboard/owner/services');
+    return ok(result as Service);
+  },
+});

@@ -25,7 +25,8 @@ export default async function StaffPage() {
   });
 
   // Fetch services for assignment
-  const services = await getServices();
+  const servicesResult = await getServices({});
+  const services = servicesResult.success ? servicesResult.data : [];
 
   return (
     <div className="space-y-6">
