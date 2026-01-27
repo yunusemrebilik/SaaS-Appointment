@@ -220,103 +220,6 @@ function computeMemberSlots(
   return slots;
 }
 
-async function getMemberAvailableSlots(
-  memberId: string,
-  dayOfWeek: number,
-  dayStart: Date,
-  dayEnd: Date,
-  serviceDuration: number
-): Promise<string[]> {
-  // 1. Get member's weekly schedule for this day
-  const schedules = await db
-    .selectFrom('memberWeeklySchedules')
-    .select(['startTime', 'endTime'])
-    .where('memberId', '=', memberId)
-    .where('dayOfWeek', '=', dayOfWeek)
-    .execute();
-
-  if (schedules.length === 0) {
-    return []; // Member doesn't work this day
-  }
-
-  // 2. Check for overrides (day off, time off, etc.)
-  const overrides = await db
-    .selectFrom('memberScheduleOverrides')
-    .selectAll()
-    .where('memberId', '=', memberId)
-    .where('date', '>=', dayStart)
-    .where('date', '<=', dayEnd)
-    .execute();
-
-  // If there's a day_off override, no slots available
-  const hasDayOff = overrides.some((o) => o.type === 'day_off');
-  if (hasDayOff) {
-    return [];
-  }
-
-  // 3. Get existing bookings for this member on this date
-  const existingBookings = await db
-    .selectFrom('bookings')
-    .select(['startTime', 'endTime'])
-    .where('memberId', '=', memberId)
-    .where('startTime', '>=', dayStart)
-    .where('endTime', '<=', dayEnd)
-    .where('status', 'in', ['pending', 'confirmed'])
-    .execute();
-
-  // 4. Generate all possible slots from schedule
-  const slots: string[] = [];
-
-  for (const schedule of schedules) {
-    const [startHour, startMin] = schedule.startTime.split(':').map(Number);
-    const [endHour, endMin] = schedule.endTime.split(':').map(Number);
-
-    let currentMinutes = startHour * 60 + startMin;
-    const endMinutes = endHour * 60 + endMin;
-
-    while (currentMinutes + serviceDuration <= endMinutes) {
-      const slotHour = Math.floor(currentMinutes / 60);
-      const slotMin = currentMinutes % 60;
-      const slotTime = `${slotHour.toString().padStart(2, '0')}:${slotMin.toString().padStart(2, '0')}`;
-
-      // Check if this slot conflicts with existing bookings
-      const slotStart = new Date(dayStart);
-      slotStart.setHours(slotHour, slotMin, 0, 0);
-      const slotEnd = new Date(slotStart);
-      slotEnd.setMinutes(slotEnd.getMinutes() + serviceDuration);
-
-      const hasConflict = existingBookings.some((booking) => {
-        const bookingStart = new Date(booking.startTime);
-        const bookingEnd = new Date(booking.endTime);
-        // Overlap check: slot overlaps if it starts before booking ends AND ends after booking starts
-        return slotStart < bookingEnd && slotEnd > bookingStart;
-      });
-
-      // Check time_off overrides
-      const hasTimeOffConflict = overrides
-        .filter((o) => o.type === 'time_off' && o.startTime && o.endTime)
-        .some((o) => {
-          const [offStartH, offStartM] = o.startTime!.split(':').map(Number);
-          const [offEndH, offEndM] = o.endTime!.split(':').map(Number);
-          const offStartMinutes = offStartH * 60 + offStartM;
-          const offEndMinutes = offEndH * 60 + offEndM;
-          const slotStartMinutes = slotHour * 60 + slotMin;
-          const slotEndMinutes = slotStartMinutes + serviceDuration;
-          return slotStartMinutes < offEndMinutes && slotEndMinutes > offStartMinutes;
-        });
-
-      if (!hasConflict && !hasTimeOffConflict) {
-        slots.push(slotTime);
-      }
-
-      // Move to next slot based on service duration
-      currentMinutes += serviceDuration;
-    }
-  }
-
-  return slots;
-}
-
 // ============ Booking Creation ============
 
 interface CreateBookingParams {
@@ -385,22 +288,51 @@ export async function createPublicBooking(params: CreateBookingParams): Promise<
       return { success: false, error: 'No staff available for this service' };
     }
 
+    const memberIds = staff.map((s) => s.memberId);
+    const dayOfWeek = startTime.getDay();
+    const dayStart = new Date(startTime);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(startTime);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    // Batch-fetch availability data for all staff
+    const [allSchedules, allOverrides, allBookings] = await Promise.all([
+      db.selectFrom('memberWeeklySchedules')
+        .select(['memberId', 'startTime', 'endTime'])
+        .where('memberId', 'in', memberIds)
+        .where('dayOfWeek', '=', dayOfWeek)
+        .execute(),
+      db.selectFrom('memberScheduleOverrides')
+        .selectAll()
+        .where('memberId', 'in', memberIds)
+        .where('date', '>=', dayStart)
+        .where('date', '<=', dayEnd)
+        .execute(),
+      db.selectFrom('bookings')
+        .select(['memberId', 'startTime', 'endTime'])
+        .where('memberId', 'in', memberIds)
+        .where('startTime', '>=', dayStart)
+        .where('endTime', '<=', dayEnd)
+        .where('status', 'in', ['pending', 'confirmed'])
+        .execute(),
+    ]);
+
+    const slotTime = `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}`;
+
     // Find a staff member who is available at this time
     for (const s of staff) {
-      const dayStart = new Date(startTime);
-      dayStart.setHours(0, 0, 0, 0);
-      const dayEnd = new Date(startTime);
-      dayEnd.setHours(23, 59, 59, 999);
+      const memberSchedules = allSchedules.filter((sch) => sch.memberId === s.memberId);
+      const memberOverrides = allOverrides.filter((o) => o.memberId === s.memberId);
+      const memberBookings = allBookings.filter((b) => b.memberId === s.memberId);
 
-      const slots = await getMemberAvailableSlots(
-        s.memberId,
-        startTime.getDay(),
+      const slots = computeMemberSlots(
+        memberSchedules,
+        memberOverrides,
+        memberBookings,
         dayStart,
-        dayEnd,
         service.durationMin
       );
 
-      const slotTime = `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}`;
       if (slots.includes(slotTime)) {
         memberId = s.memberId;
         break;
