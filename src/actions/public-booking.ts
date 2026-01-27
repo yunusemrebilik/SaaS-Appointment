@@ -207,8 +207,8 @@ async function getMemberAvailableSlots(
         slots.push(slotTime);
       }
 
-      // Move to next slot (30 min intervals)
-      currentMinutes += 30;
+      // Move to next slot based on service duration
+      currentMinutes += serviceDuration;
     }
   }
 
