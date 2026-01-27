@@ -69,18 +69,18 @@ export function AppointmentsList({ bookings }: AppointmentsListProps) {
 
   async function handleStatusChange(id: string, status: Exclude<BookingStatus, 'pending' | 'cancelled'>) {
     setActionId(id);
-    try {
-      await updateBookingStatus(id, status);
-      toast.success(`Appointment ${status === 'confirmed' ? 'confirmed' : status === 'completed' ? 'completed' : 'marked as no show'}`);
-      startTransition(() => {
-        router.refresh();
-      });
-    } catch (error) {
-      console.error('Error updating status:', error);
-      toast.error('Failed to update appointment');
-    } finally {
-      setActionId(null);
+    const result = await updateBookingStatus({ id, status });
+    setActionId(null);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    toast.success(`Appointment ${status === 'confirmed' ? 'confirmed' : status === 'completed' ? 'completed' : 'marked as no show'}`);
+    startTransition(() => {
+      router.refresh();
+    });
   }
 
   function handleCancelClick(id: string, customerName: string) {
@@ -91,17 +91,17 @@ export function AppointmentsList({ bookings }: AppointmentsListProps) {
   async function handleCancelConfirm(reason?: string) {
     if (!bookingToCancel) return;
 
-    try {
-      await cancelBooking(bookingToCancel.id, reason);
-      toast.success('Appointment cancelled');
-      startTransition(() => {
-        router.refresh();
-      });
-    } catch (error) {
-      console.error('Error cancelling:', error);
-      toast.error('Failed to cancel appointment');
-      throw error;
+    const result = await cancelBooking({ id: bookingToCancel.id, reason });
+
+    if (!result.success) {
+      toast.error(result.error);
+      throw new Error(result.error);
     }
+
+    toast.success('Appointment cancelled');
+    startTransition(() => {
+      router.refresh();
+    });
   }
 
   if (bookings.length === 0) {

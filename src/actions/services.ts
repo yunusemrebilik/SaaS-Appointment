@@ -36,7 +36,7 @@ export const getServiceCount = createSafeAction({
   },
 });
 
-const getServiceByIdSchema = z.object({ id: z.string().uuid() });
+const getServiceByIdSchema = z.object({ id: z.uuid() });
 
 export const getServiceById = createSafeAction({
   schema: getServiceByIdSchema,
@@ -81,7 +81,7 @@ export const createService = createSafeAction({
 });
 
 const updateServiceSchema = z.object({
-  id: z.string().uuid(),
+  id: z.uuid(),
   data: serviceFormSchema,
 });
 
@@ -112,7 +112,7 @@ export const updateService = createSafeAction({
   },
 });
 
-const deleteServiceSchema = z.object({ id: z.string().uuid() });
+const deleteServiceSchema = z.object({ id: z.uuid() });
 
 export const deleteService = createSafeAction({
   schema: deleteServiceSchema,

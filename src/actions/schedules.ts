@@ -1,10 +1,10 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db/db';
-import { Selectable, Insertable, Updateable } from 'kysely';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
+import { Selectable, Insertable } from 'kysely';
 import { revalidatePath } from 'next/cache';
+import { createSafeAction, ok, err } from '@/lib/safe-action';
 import type { MemberWeeklySchedules, MemberScheduleOverrides } from '@/types/db';
 
 export type WeeklySchedule = Selectable<MemberWeeklySchedules>;
@@ -13,146 +13,176 @@ export type OverrideType = 'day_off' | 'time_off' | 'extra_work';
 export type ScheduleOverride = Selectable<MemberScheduleOverrides> & { type: OverrideType };
 export type NewScheduleOverride = Insertable<MemberScheduleOverrides>;
 
-async function getCurrentMemberId(): Promise<string> {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
+// ============ Schemas ============
 
-  if (!session?.session.activeOrganizationId || !session?.user?.id) {
-    throw new Error('Not authenticated');
-  }
+const weeklyScheduleSlotSchema = z.object({
+  dayOfWeek: z.number().min(0).max(6),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
+  endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
+});
 
-  // Get the member record for this user in the active organization
-  const members = await auth.api.listMembers({
-    headers: requestHeaders,
-    query: { organizationId: session.session.activeOrganizationId },
-  });
+const getWeeklyScheduleSchema = z.object({
+  memberId: z.uuid().optional(),
+});
 
-  const member = members?.members?.find((m) => m.userId === session.user.id);
-  if (!member) {
-    throw new Error('Not a member of this organization');
-  }
+const setWeeklyScheduleSchema = z.object({
+  slots: z.array(weeklyScheduleSlotSchema),
+  memberId: z.uuid().optional(),
+});
 
-  return member.id;
-}
+const getOverridesSchema = z.object({
+  startDate: z.date(),
+  endDate: z.date(),
+  memberId: z.uuid().optional(),
+});
 
-// ============ Weekly Schedule ============
+const createOverrideSchema = z.object({
+  type: z.enum(['day_off', 'time_off', 'extra_work']),
+  date: z.date(),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+  endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+  reason: z.string().optional(),
+  memberId: z.uuid().optional(),
+});
 
-export async function getWeeklySchedule(memberIdParam?: string): Promise<WeeklySchedule[]> {
-  const memberId = memberIdParam || await getCurrentMemberId();
+const deleteOverrideSchema = z.object({
+  overrideId: z.uuid(),
+});
 
-  const schedules = await db
-    .selectFrom('memberWeeklySchedules')
-    .selectAll()
-    .where('memberId', '=', memberId)
-    .orderBy('dayOfWeek', 'asc')
-    .orderBy('startTime', 'asc')
-    .execute();
+// ============ Weekly Schedule Operations ============
 
-  return schedules as WeeklySchedule[];
-}
+export const getWeeklySchedule = createSafeAction({
+  schema: getWeeklyScheduleSchema,
+  handler: async ({ data, ctx }) => {
+    const memberId = data?.memberId || ctx.memberId;
 
-export async function setWeeklySchedule(
-  slots: Array<{
-    dayOfWeek: number;
-    startTime: string;
-    endTime: string;
-  }>,
-  memberIdParam?: string
-) {
-  const memberId = memberIdParam || await getCurrentMemberId();
+    if (!memberId) {
+      return err('Member ID is required', 'INVALID_INPUT');
+    }
 
-  // Delete existing schedule
-  await db
-    .deleteFrom('memberWeeklySchedules')
-    .where('memberId', '=', memberId)
-    .execute();
-
-  // Insert new schedule
-  if (slots.length > 0) {
-    await db
-      .insertInto('memberWeeklySchedules')
-      .values(
-        slots.map((slot) => ({
-          memberId: memberId,
-          dayOfWeek: slot.dayOfWeek,
-          startTime: slot.startTime,
-          endTime: slot.endTime,
-        }))
-      )
+    const schedules = await db
+      .selectFrom('memberWeeklySchedules')
+      .selectAll()
+      .where('memberId', '=', memberId)
+      .orderBy('dayOfWeek', 'asc')
+      .orderBy('startTime', 'asc')
       .execute();
-  }
 
-  revalidatePath('/dashboard/schedule');
-  return { success: true };
-}
+    return ok(schedules as WeeklySchedule[]);
+  },
+});
 
-// ============ Schedule Overrides ============
+export const setWeeklySchedule = createSafeAction({
+  schema: setWeeklyScheduleSchema,
+  handler: async ({ data, ctx }) => {
+    const memberId = data.memberId || ctx.memberId;
 
-export async function getOverrides(
-  startDate: Date,
-  endDate: Date,
-  memberIdParam?: string
-): Promise<ScheduleOverride[]> {
-  const memberId = memberIdParam || await getCurrentMemberId();
+    if (!memberId) {
+      return err('Member ID is required', 'INVALID_INPUT');
+    }
 
-  const overrides = await db
-    .selectFrom('memberScheduleOverrides')
-    .selectAll()
-    .where('memberId', '=', memberId)
-    .where('date', '>=', startDate)
-    .where('date', '<=', endDate)
-    .orderBy('date', 'asc')
-    .execute();
+    // Delete existing schedule
+    await db
+      .deleteFrom('memberWeeklySchedules')
+      .where('memberId', '=', memberId)
+      .execute();
 
-  return overrides as unknown as ScheduleOverride[];
-}
+    // Insert new schedule
+    if (data.slots.length > 0) {
+      await db
+        .insertInto('memberWeeklySchedules')
+        .values(
+          data.slots.map((slot) => ({
+            memberId: memberId,
+            dayOfWeek: slot.dayOfWeek,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+          }))
+        )
+        .execute();
+    }
 
-export async function createOverride(data: {
-  type: OverrideType;
-  date: Date;
-  startTime?: string;
-  endTime?: string;
-  reason?: string;
-  memberId?: string;
-}) {
-  const memberId = data.memberId || await getCurrentMemberId();
+    revalidatePath('/dashboard/schedule');
+    return ok({ success: true });
+  },
+});
 
-  const result = await db
-    .insertInto('memberScheduleOverrides')
-    .values({
-      memberId,
-      type: data.type,
-      date: data.date,
-      startTime: data.startTime || null,
-      endTime: data.endTime || null,
-      reason: data.reason || null,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow();
+// ============ Schedule Override Operations ============
 
-  revalidatePath('/dashboard/schedule');
-  return result;
-}
+export const getOverrides = createSafeAction({
+  schema: getOverridesSchema,
+  handler: async ({ data, ctx }) => {
+    const memberId = data.memberId || ctx.memberId;
 
-export async function deleteOverride(overrideId: string) {
-  const memberId = await getCurrentMemberId();
+    if (!memberId) {
+      return err('Member ID is required', 'INVALID_INPUT');
+    }
 
-  // Verify the override belongs to this member
-  const override = await db
-    .selectFrom('memberScheduleOverrides')
-    .select(['id', 'memberId'])
-    .where('id', '=', overrideId)
-    .executeTakeFirst();
+    const overrides = await db
+      .selectFrom('memberScheduleOverrides')
+      .selectAll()
+      .where('memberId', '=', memberId)
+      .where('date', '>=', data.startDate)
+      .where('date', '<=', data.endDate)
+      .orderBy('date', 'asc')
+      .execute();
 
-  if (!override || override.memberId !== memberId) {
-    throw new Error('Override not found or not authorized');
-  }
+    return ok(overrides as unknown as ScheduleOverride[]);
+  },
+});
 
-  await db
-    .deleteFrom('memberScheduleOverrides')
-    .where('id', '=', overrideId)
-    .execute();
+export const createOverride = createSafeAction({
+  schema: createOverrideSchema,
+  handler: async ({ data, ctx }) => {
+    const memberId = data.memberId || ctx.memberId;
 
-  revalidatePath('/dashboard/schedule');
-  return { success: true };
-}
+    if (!memberId) {
+      return err('Member ID is required', 'INVALID_INPUT');
+    }
+
+    const result = await db
+      .insertInto('memberScheduleOverrides')
+      .values({
+        memberId,
+        type: data.type,
+        date: data.date,
+        startTime: data.startTime || null,
+        endTime: data.endTime || null,
+        reason: data.reason || null,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    revalidatePath('/dashboard/schedule');
+    return ok(result as ScheduleOverride);
+  },
+});
+
+export const deleteOverride = createSafeAction({
+  schema: deleteOverrideSchema,
+  requireAuth: true,
+  handler: async ({ data, ctx }) => {
+    if (!ctx.memberId) {
+      return err('Member ID is required', 'INVALID_INPUT');
+    }
+
+    // Verify the override belongs to this member
+    const override = await db
+      .selectFrom('memberScheduleOverrides')
+      .select(['id', 'memberId'])
+      .where('id', '=', data.overrideId)
+      .executeTakeFirst();
+
+    if (!override || override.memberId !== ctx.memberId) {
+      return err('Override not found or not authorized', 'NOT_FOUND');
+    }
+
+    await db
+      .deleteFrom('memberScheduleOverrides')
+      .where('id', '=', data.overrideId)
+      .execute();
+
+    revalidatePath('/dashboard/schedule');
+    return ok({ success: true });
+  },
+});

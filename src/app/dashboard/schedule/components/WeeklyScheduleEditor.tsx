@@ -79,23 +79,23 @@ export function WeeklyScheduleEditor({ initialSchedule, memberId }: WeeklySchedu
 
   async function handleSave() {
     setSaving(true);
-    try {
-      await setWeeklySchedule(
-        schedule.map((s) => ({
-          dayOfWeek: s.dayOfWeek,
-          startTime: s.startTime,
-          endTime: s.endTime,
-        })),
-        memberId
-      );
-      toast.success('Schedule saved');
-      router.refresh();
-    } catch (error) {
-      console.error('Error saving schedule:', error);
-      toast.error('Failed to save schedule');
-    } finally {
-      setSaving(false);
+    const result = await setWeeklySchedule({
+      slots: schedule.map((s) => ({
+        dayOfWeek: s.dayOfWeek,
+        startTime: s.startTime,
+        endTime: s.endTime,
+      })),
+      memberId
+    });
+    setSaving(false);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    toast.success('Schedule saved');
+    router.refresh();
   }
 
   return (

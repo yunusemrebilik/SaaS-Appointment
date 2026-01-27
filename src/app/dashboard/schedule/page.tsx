@@ -30,14 +30,21 @@ export default async function SchedulePage() {
   }
 
   // Fetch schedule data
-  const weeklySchedule = await getWeeklySchedule(currentMember.id);
+  const weeklyScheduleResult = await getWeeklySchedule({ memberId: currentMember.id });
 
   // Get overrides for the next 30 days
   const today = new Date();
   const thirtyDaysLater = new Date(today);
   thirtyDaysLater.setDate(thirtyDaysLater.getDate() + 30);
 
-  const overrides = await getOverrides(today, thirtyDaysLater, currentMember.id);
+  const overridesResult = await getOverrides({
+    startDate: today,
+    endDate: thirtyDaysLater,
+    memberId: currentMember.id
+  });
+
+  const weeklySchedule = weeklyScheduleResult.success ? weeklyScheduleResult.data : [];
+  const overrides = overridesResult.success ? overridesResult.data : [];
 
   return (
     <div className="space-y-8">

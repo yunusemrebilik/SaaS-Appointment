@@ -1,219 +1,236 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db/db';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import { createSafeAction, ok, err, type ActionResult } from '@/lib/safe-action';
 import { Booking, BookingFilters, BookingStatus } from '@/types/booking';
 
-async function getSessionInfo() {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
+// ============ Schemas ============
 
-  if (!session?.session.activeOrganizationId || !session?.user?.id) {
-    throw new Error('Not authenticated');
-  }
+const bookingFiltersSchema = z.object({
+  memberId: z.uuid().optional(),
+  status: z.union([
+    z.array(z.enum(['pending', 'confirmed', 'completed', 'cancelled', 'no_show'])),
+    z.enum(['pending', 'confirmed', 'completed', 'cancelled', 'no_show'])
+  ]).optional(),
+  startDate: z.date().optional(),
+  endDate: z.date().optional(),
+}).optional();
 
-  // Get member info
-  const members = await auth.api.listMembers({
-    headers: requestHeaders,
-    query: { organizationId: session.session.activeOrganizationId },
-  });
+const getBookingByIdSchema = z.object({ id: z.uuid() });
 
-  const currentMember = members?.members?.find(
-    (m: { userId: string }) => m.userId === session.user.id
-  );
+const updateBookingStatusSchema = z.object({
+  id: z.uuid(),
+  status: z.enum(['pending', 'confirmed', 'completed', 'cancelled', 'no_show']),
+});
 
-  return {
-    organizationId: session.session.activeOrganizationId,
-    userId: session.user.id,
-    memberId: currentMember?.id || null,
-    role: (currentMember?.role as 'owner' | 'admin' | 'member') || null,
-  };
-}
+const cancelBookingSchema = z.object({
+  id: z.uuid(),
+  reason: z.string().optional(),
+});
 
-export async function getBookings(filters: BookingFilters = {}): Promise<(Booking & { serviceName: string | null })[]> {
-  const { organizationId, memberId, role } = await getSessionInfo();
+// ============ Read Operations ============
 
-  let query = db
-    .selectFrom('bookings')
-    .leftJoin('services', 'services.id', 'bookings.serviceId')
-    .selectAll('bookings')
-    .select(['services.name as serviceName'])
-    .where('bookings.organizationId', '=', organizationId);
+export const getBookings = createSafeAction({
+  schema: bookingFiltersSchema,
+  handler: async ({ data, ctx }) => {
+    const filters = data || {};
 
-  // Staff members can only see their own appointments
-  if (role === 'member' && memberId) {
-    query = query.where('bookings.memberId', '=', memberId);
-  } else if (filters.memberId) {
-    query = query.where('bookings.memberId', '=', filters.memberId);
-  }
+    let query = db
+      .selectFrom('bookings')
+      .leftJoin('services', 'services.id', 'bookings.serviceId')
+      .selectAll('bookings')
+      .select(['services.name as serviceName'])
+      .where('bookings.organizationId', '=', ctx.organizationId);
 
-  // Apply status filter
-  if (filters.status) {
-    if (Array.isArray(filters.status)) {
-      query = query.where('bookings.status', 'in', filters.status);
-    } else {
-      query = query.where('bookings.status', '=', filters.status);
+    // Staff members can only see their own appointments
+    if (ctx.role === 'member' && ctx.memberId) {
+      query = query.where('bookings.memberId', '=', ctx.memberId);
+    } else if (filters.memberId) {
+      query = query.where('bookings.memberId', '=', filters.memberId);
     }
-  }
 
-  // Apply date filters
-  if (filters.startDate) {
-    query = query.where('bookings.startTime', '>=', filters.startDate);
-  }
-  if (filters.endDate) {
-    query = query.where('bookings.endTime', '<=', filters.endDate);
-  }
+    // Apply status filter
+    if (filters.status) {
+      if (Array.isArray(filters.status)) {
+        query = query.where('bookings.status', 'in', filters.status);
+      } else {
+        query = query.where('bookings.status', '=', filters.status);
+      }
+    }
 
-  const bookings = await query
-    .orderBy('bookings.startTime', 'asc')
-    .execute();
+    // Apply date filters
+    if (filters.startDate) {
+      query = query.where('bookings.startTime', '>=', filters.startDate);
+    }
+    if (filters.endDate) {
+      query = query.where('bookings.endTime', '<=', filters.endDate);
+    }
 
-  return bookings as unknown as (Booking & { serviceName: string | null })[];
-}
+    const bookings = await query
+      .orderBy('bookings.startTime', 'asc')
+      .execute();
 
-export async function getBookingById(id: string): Promise<(Booking & { serviceName: string | null }) | null> {
-  const { organizationId, memberId, role } = await getSessionInfo();
+    return ok(bookings as unknown as (Booking & { serviceName: string | null })[]);
+  },
+});
 
-  let query = db
-    .selectFrom('bookings')
-    .leftJoin('services', 'services.id', 'bookings.serviceId')
-    .selectAll('bookings')
-    .select(['services.name as serviceName'])
-    .where('bookings.id', '=', id)
-    .where('bookings.organizationId', '=', organizationId);
+export const getBookingById = createSafeAction({
+  schema: getBookingByIdSchema,
+  handler: async ({ data, ctx }) => {
+    let query = db
+      .selectFrom('bookings')
+      .leftJoin('services', 'services.id', 'bookings.serviceId')
+      .selectAll('bookings')
+      .select(['services.name as serviceName'])
+      .where('bookings.id', '=', data.id)
+      .where('bookings.organizationId', '=', ctx.organizationId);
 
-  // Staff can only view their own bookings
-  if (role === 'member' && memberId) {
-    query = query.where('bookings.memberId', '=', memberId);
-  }
+    // Staff can only view their own bookings
+    if (ctx.role === 'member' && ctx.memberId) {
+      query = query.where('bookings.memberId', '=', ctx.memberId);
+    }
 
-  const booking = await query.executeTakeFirst();
-  return (booking as unknown as (Booking & { serviceName: string | null })) || null;
-}
+    const booking = await query.executeTakeFirst();
 
-export async function updateBookingStatus(id: string, status: BookingStatus) {
-  const { organizationId, memberId, role } = await getSessionInfo();
+    if (!booking) {
+      return err('Booking not found', 'NOT_FOUND');
+    }
 
-  // Verify booking belongs to this org and user has access
-  const booking = await db
-    .selectFrom('bookings')
-    .select(['id', 'memberId', 'organizationId'])
-    .where('id', '=', id)
-    .where('organizationId', '=', organizationId)
-    .executeTakeFirst();
+    return ok(booking as unknown as (Booking & { serviceName: string | null }));
+  },
+});
 
-  if (!booking) {
-    throw new Error('Booking not found');
-  }
+// ============ Write Operations ============
 
-  // Staff can only update their own bookings
-  if (role === 'member' && booking.memberId !== memberId) {
-    throw new Error('Not authorized to update this booking');
-  }
+export const updateBookingStatus = createSafeAction({
+  schema: updateBookingStatusSchema,
+  handler: async ({ data, ctx }) => {
+    // Verify booking belongs to this org and user has access
+    const booking = await db
+      .selectFrom('bookings')
+      .select(['id', 'memberId', 'organizationId'])
+      .where('id', '=', data.id)
+      .where('organizationId', '=', ctx.organizationId)
+      .executeTakeFirst();
 
-  await db
-    .updateTable('bookings')
-    .set({ status, updatedAt: new Date() })
-    .where('id', '=', id)
-    .execute();
+    if (!booking) {
+      return err('Booking not found', 'NOT_FOUND');
+    }
 
-  revalidatePath('/dashboard/appointments');
-  revalidatePath('/dashboard/calendar');
-  return { success: true };
-}
+    // Staff can only update their own bookings
+    if (ctx.role === 'member' && booking.memberId !== ctx.memberId) {
+      return err('Not authorized to update this booking', 'FORBIDDEN');
+    }
 
-export async function cancelBooking(id: string, reason?: string) {
-  const { organizationId, memberId, role } = await getSessionInfo();
+    await db
+      .updateTable('bookings')
+      .set({ status: data.status, updatedAt: new Date() })
+      .where('id', '=', data.id)
+      .execute();
 
-  const booking = await db
-    .selectFrom('bookings')
-    .select(['id', 'memberId', 'organizationId', 'notes'])
-    .where('id', '=', id)
-    .where('organizationId', '=', organizationId)
-    .executeTakeFirst();
+    revalidatePath('/dashboard/appointments');
+    revalidatePath('/dashboard/calendar');
 
-  if (!booking) {
-    throw new Error('Booking not found');
-  }
+    return ok({ success: true });
+  },
+});
 
-  if (role === 'member' && booking.memberId !== memberId) {
-    throw new Error('Not authorized to cancel this booking');
-  }
+export const cancelBooking = createSafeAction({
+  schema: cancelBookingSchema,
+  handler: async ({ data, ctx }) => {
+    const booking = await db
+      .selectFrom('bookings')
+      .select(['id', 'memberId', 'organizationId', 'notes'])
+      .where('id', '=', data.id)
+      .where('organizationId', '=', ctx.organizationId)
+      .executeTakeFirst();
 
-  const updatedNotes = reason
-    ? `${booking.notes || ''}\n[Cancelled: ${reason}]`.trim()
-    : booking.notes;
+    if (!booking) {
+      return err('Booking not found', 'NOT_FOUND');
+    }
 
-  await db
-    .updateTable('bookings')
-    .set({
-      status: 'cancelled',
-      notes: updatedNotes,
-      updatedAt: new Date(),
-    })
-    .where('id', '=', id)
-    .execute();
+    if (ctx.role === 'member' && booking.memberId !== ctx.memberId) {
+      return err('Not authorized to cancel this booking', 'FORBIDDEN');
+    }
 
-  revalidatePath('/dashboard/appointments');
-  revalidatePath('/dashboard/calendar');
-  return { success: true };
-}
+    const updatedNotes = data.reason
+      ? `${booking.notes || ''}\\n[Cancelled: ${data.reason}]`.trim()
+      : booking.notes;
 
-// Get today's bookings for dashboard
-export async function getTodaysBookings() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+    await db
+      .updateTable('bookings')
+      .set({
+        status: 'cancelled',
+        notes: updatedNotes,
+        updatedAt: new Date(),
+      })
+      .where('id', '=', data.id)
+      .execute();
 
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+    revalidatePath('/dashboard/appointments');
+    revalidatePath('/dashboard/calendar');
 
-  return getBookings({
-    startDate: today,
-    endDate: tomorrow,
-    status: ['pending', 'confirmed'],
-  });
-}
+    return ok({ success: true });
+  },
+});
 
-// Get upcoming bookings count for dashboard stats
-export async function getBookingStats() {
-  const { organizationId, memberId, role } = await getSessionInfo();
+// ============ Dashboard Stats ============
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+export const getTodaysBookings = createSafeAction({
+  handler: async ({ ctx }) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-  let baseQuery = db
-    .selectFrom('bookings')
-    .where('organizationId', '=', organizationId)
-    .where('startTime', '>=', today);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
 
-  if (role === 'member' && memberId) {
-    baseQuery = baseQuery.where('memberId', '=', memberId);
-  }
+    return getBookings({
+      startDate: today,
+      endDate: tomorrow,
+      status: ['pending', 'confirmed'],
+    });
+  },
+});
 
-  const pending = await baseQuery
-    .where('status', '=', 'pending')
-    .select(db.fn.count<number>('id').as('count'))
-    .executeTakeFirst();
+export const getBookingStats = createSafeAction({
+  handler: async ({ ctx }) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-  const confirmed = await baseQuery
-    .where('status', '=', 'confirmed')
-    .select(db.fn.count<number>('id').as('count'))
-    .executeTakeFirst();
+    let baseQuery = db
+      .selectFrom('bookings')
+      .where('organizationId', '=', ctx.organizationId)
+      .where('startTime', '>=', today);
 
-  const todayEnd = new Date(today);
-  todayEnd.setDate(todayEnd.getDate() + 1);
+    if (ctx.role === 'member' && ctx.memberId) {
+      baseQuery = baseQuery.where('memberId', '=', ctx.memberId);
+    }
 
-  const todaysCount = await baseQuery
-    .where('startTime', '<', todayEnd)
-    .where('status', 'in', ['pending', 'confirmed'])
-    .select(db.fn.count<number>('id').as('count'))
-    .executeTakeFirst();
+    const pending = await baseQuery
+      .where('status', '=', 'pending')
+      .select(db.fn.count<number>('id').as('count'))
+      .executeTakeFirst();
 
-  return {
-    pending: Number(pending?.count || 0),
-    confirmed: Number(confirmed?.count || 0),
-    today: Number(todaysCount?.count || 0),
-  };
-}
+    const confirmed = await baseQuery
+      .where('status', '=', 'confirmed')
+      .select(db.fn.count<number>('id').as('count'))
+      .executeTakeFirst();
+
+    const todayEnd = new Date(today);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+
+    const todaysCount = await baseQuery
+      .where('startTime', '<', todayEnd)
+      .where('status', 'in', ['pending', 'confirmed'])
+      .select(db.fn.count<number>('id').as('count'))
+      .executeTakeFirst();
+
+    return ok({
+      pending: Number(pending?.count || 0),
+      confirmed: Number(confirmed?.count || 0),
+      today: Number(todaysCount?.count || 0),
+    });
+  },
+});

@@ -8,11 +8,15 @@ interface AppointmentsDataProps {
 }
 
 export async function AppointmentsData({ status, startDate, endDate }: AppointmentsDataProps) {
-  const bookings = await getBookings({
+  const result = await getBookings({
     status,
     startDate,
     endDate,
   });
 
-  return <AppointmentsList bookings={bookings} />;
+  if (!result.success) {
+    return <div className="p-4 text-destructive">{result.error}</div>;
+  }
+
+  return <AppointmentsList bookings={result.data} />;
 }

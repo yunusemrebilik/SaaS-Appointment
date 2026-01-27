@@ -29,16 +29,16 @@ export function OverridesList({ overrides }: OverridesListProps) {
     if (!confirm('Are you sure you want to delete this exception?')) return;
 
     setDeletingId(id);
-    try {
-      await deleteOverride(id);
-      toast.success('Exception deleted');
-      router.refresh();
-    } catch (error) {
-      console.error('Error deleting override:', error);
-      toast.error('Failed to delete exception');
-    } finally {
-      setDeletingId(null);
+    const result = await deleteOverride({ overrideId: id });
+    setDeletingId(null);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    toast.success('Exception deleted');
+    router.refresh();
   }
 
   if (overrides.length === 0) {

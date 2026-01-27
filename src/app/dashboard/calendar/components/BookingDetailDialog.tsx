@@ -89,30 +89,30 @@ export function BookingDetailDialog({ booking, open, onOpenChange }: BookingDeta
 
   async function handleStatusChange(status: Exclude<BookingStatus, 'pending' | 'cancelled'>) {
     setLoading(true);
-    try {
-      await updateBookingStatus(bookingId, status);
-      toast.success(`Appointment ${status === 'confirmed' ? 'confirmed' : status === 'completed' ? 'completed' : 'marked as no show'}`);
-      router.refresh();
-      onOpenChange(false);
-    } catch (error) {
-      console.error('Error updating status:', error);
-      toast.error('Failed to update appointment');
-    } finally {
-      setLoading(false);
+    const result = await updateBookingStatus({ id: bookingId, status });
+    setLoading(false);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    toast.success(`Appointment ${status === 'confirmed' ? 'confirmed' : status === 'completed' ? 'completed' : 'marked as no show'}`);
+    router.refresh();
+    onOpenChange(false);
   }
 
   async function handleCancelConfirm(reason?: string) {
-    try {
-      await cancelBooking(bookingId, reason);
-      toast.success('Appointment cancelled');
-      router.refresh();
-      onOpenChange(false);
-    } catch (error) {
-      console.error('Error cancelling:', error);
-      toast.error('Failed to cancel appointment');
-      throw error;
+    const result = await cancelBooking({ id: bookingId, reason });
+
+    if (!result.success) {
+      toast.error(result.error);
+      throw new Error(result.error);
     }
+
+    toast.success('Appointment cancelled');
+    router.refresh();
+    onOpenChange(false);
   }
 
   const isActionable = booking.status === 'pending' || booking.status === 'confirmed';

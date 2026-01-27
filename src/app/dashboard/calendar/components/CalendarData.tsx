@@ -23,15 +23,19 @@ export async function CalendarData({ initialWeekStart }: CalendarDataProps) {
   rangeEnd.setDate(rangeEnd.getDate() + 63); // 9 weeks after
 
   // Role-based filtering is handled inside getBookings()
-  const bookings = await getBookings({
+  const result = await getBookings({
     startDate: rangeStart,
     endDate: rangeEnd,
     status: ['pending', 'confirmed', 'completed'],
   });
 
+  if (!result.success) {
+    return <div className="p-4 text-destructive">{result.error}</div>;
+  }
+
   return (
     <CalendarView
-      bookings={bookings}
+      bookings={result.data}
       initialWeekStart={initialWeekStart}
     />
   );
