@@ -74,12 +74,14 @@ export function NewAppointmentButton() {
   // Load data when dialog opens
   React.useEffect(() => {
     if (open) {
-      Promise.all([getServices({}), getStaffForAppointmentForm()]).then(
-        ([servicesResult, staffData]) => {
+      Promise.all([getServices({}), getStaffForAppointmentForm({})]).then(
+        ([servicesResult, staffResult]) => {
           if (servicesResult.success) {
             setServices(servicesResult.data as Service[]);
           }
-          setStaff(staffData);
+          if (staffResult.success) {
+            setStaff(staffResult.data);
+          }
         }
       );
     }
@@ -117,32 +119,30 @@ export function NewAppointmentButton() {
 
   async function onSubmit(data: AppointmentFormData) {
     setLoading(true);
-    try {
-      const [hours, minutes] = data.time.split(':').map(Number);
-      const startTime = new Date(data.date);
-      startTime.setHours(hours, minutes, 0, 0);
+    const [hours, minutes] = data.time.split(':').map(Number);
+    const startTime = new Date(data.date);
+    startTime.setHours(hours, minutes, 0, 0);
 
-      await createDashboardBooking({
-        serviceId: data.serviceId,
-        memberId: data.memberId,
-        startTime,
-        customerName: data.customerName,
-        customerPhone: data.customerPhone,
-        notes: data.notes,
-      });
+    const result = await createDashboardBooking({
+      serviceId: data.serviceId,
+      memberId: data.memberId,
+      startTime,
+      customerName: data.customerName,
+      customerPhone: data.customerPhone,
+      notes: data.notes,
+    });
 
-      toast.success('Appointment created successfully!');
-      setOpen(false);
-      form.reset();
-      router.refresh();
-    } catch (error) {
-      console.error('Error creating appointment:', error);
-      toast.error(
-        error instanceof Error ? error.message : 'Failed to create appointment'
-      );
-    } finally {
-      setLoading(false);
+    setLoading(false);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    toast.success('Appointment created successfully!');
+    setOpen(false);
+    form.reset();
+    router.refresh();
   }
 
   return (

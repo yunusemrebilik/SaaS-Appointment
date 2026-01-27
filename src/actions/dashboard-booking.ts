@@ -1,149 +1,121 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db/db';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import { createSafeAction, ok, err } from '@/lib/safe-action';
 import { Booking, BookingStatus } from '@/types/booking';
 
-async function getSessionInfo() {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
+// ============ Schemas ============
 
-  if (!session?.session.activeOrganizationId || !session?.user?.id) {
-    throw new Error('Not authenticated');
-  }
+const createDashboardBookingSchema = z.object({
+  serviceId: z.uuid(),
+  memberId: z.uuid(),
+  startTime: z.date(),
+  customerName: z.string().min(2, 'Customer name is required'),
+  customerPhone: z.string().min(6, 'Phone number is required'),
+  notes: z.string().optional(),
+});
 
-  const members = await auth.api.listMembers({
-    headers: requestHeaders,
-    query: { organizationId: session.session.activeOrganizationId },
-  });
+// ============ Read Operations ============
 
-  const currentMember = members?.members?.find(
-    (m: { userId: string }) => m.userId === session.user.id
-  );
+export const getStaffForAppointmentForm = createSafeAction({
+  handler: async ({ ctx }) => {
+    const requestHeaders = await headers();
 
-  return {
-    organizationId: session.session.activeOrganizationId,
-    userId: session.user.id,
-    memberId: currentMember?.id || null,
-    role: (currentMember?.role as 'owner' | 'admin' | 'member') || null,
-  };
-}
+    // Get all members
+    const members = await auth.api.listMembers({
+      headers: requestHeaders,
+      query: { organizationId: ctx.organizationId },
+    });
 
-export interface CreateDashboardBookingParams {
-  serviceId: string;
-  memberId: string;
-  startTime: Date;
-  customerName: string;
-  customerPhone: string;
-  notes?: string;
-}
+    // Get member services
+    const memberServices = await db
+      .selectFrom('memberServices')
+      .select(['memberId', 'serviceId'])
+      .execute();
 
-export async function createDashboardBooking(params: CreateDashboardBookingParams) {
-  const { organizationId, role } = await getSessionInfo();
+    // Map members with their services
+    const staffWithServices = members?.members?.map((member) => ({
+      id: member.id,
+      name: member.user.name,
+      email: member.user.email,
+      role: member.role,
+      serviceIds: memberServices
+        .filter((ms) => ms.memberId === member.id)
+        .map((ms) => ms.serviceId),
+    })) || [];
 
-  // Only owner/admin can create appointments from dashboard
-  if (role !== 'owner' && role !== 'admin') {
-    throw new Error('Only owners and admins can create appointments');
-  }
+    return ok(staffWithServices);
+  },
+});
 
-  const { serviceId, memberId, startTime, customerName, customerPhone, notes } = params;
+// ============ Write Operations ============
 
-  // Get service details
-  const service = await db
-    .selectFrom('services')
-    .select(['durationMin', 'priceCents', 'name'])
-    .where('id', '=', serviceId)
-    .where('organizationId', '=', organizationId)
-    .executeTakeFirst();
+export const createDashboardBooking = createSafeAction({
+  schema: createDashboardBookingSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
+    // Get service details
+    const service = await db
+      .selectFrom('services')
+      .select(['durationMin', 'priceCents', 'name'])
+      .where('id', '=', data.serviceId)
+      .where('organizationId', '=', ctx.organizationId)
+      .executeTakeFirst();
 
-  if (!service) {
-    throw new Error('Service not found');
-  }
+    if (!service) {
+      return err('Service not found', 'NOT_FOUND');
+    }
 
-  // Calculate end time
-  const endTime = new Date(startTime);
-  endTime.setMinutes(endTime.getMinutes() + service.durationMin);
+    // Calculate end time
+    const endTime = new Date(data.startTime);
+    endTime.setMinutes(endTime.getMinutes() + service.durationMin);
 
-  // Check for conflicts
-  const existingBookings = await db
-    .selectFrom('bookings')
-    .select(['id'])
-    .where('memberId', '=', memberId)
-    .where('startTime', '<', endTime)
-    .where('endTime', '>', startTime)
-    .where('status', 'in', ['pending', 'confirmed'] as BookingStatus[])
-    .executeTakeFirst();
+    // Check for conflicts
+    const existingBookings = await db
+      .selectFrom('bookings')
+      .select(['id'])
+      .where('memberId', '=', data.memberId)
+      .where('startTime', '<', endTime)
+      .where('endTime', '>', data.startTime)
+      .where('status', 'in', ['pending', 'confirmed'] as BookingStatus[])
+      .executeTakeFirst();
 
-  if (existingBookings) {
-    throw new Error('This time slot conflicts with an existing appointment.');
-  }
+    if (existingBookings) {
+      return err('This time slot conflicts with an existing appointment.', 'CONFLICT');
+    }
 
-  // Create the booking
-  const booking = await db
-    .insertInto('bookings')
-    .values({
-      organizationId,
-      serviceId,
-      memberId,
-      startTime,
-      endTime,
-      customerName,
-      customerPhone,
-      notes: notes || null,
-      priceAtBooking: service.priceCents,
-      status: 'confirmed', // Dashboard bookings are auto-confirmed
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow();
+    // Create the booking
+    const booking = await db
+      .insertInto('bookings')
+      .values({
+        organizationId: ctx.organizationId,
+        serviceId: data.serviceId,
+        memberId: data.memberId,
+        startTime: data.startTime,
+        endTime,
+        customerName: data.customerName,
+        customerPhone: data.customerPhone,
+        notes: data.notes || null,
+        priceAtBooking: service.priceCents,
+        status: 'confirmed', // Dashboard bookings are auto-confirmed
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
 
-  revalidatePath('/dashboard/appointments');
-  revalidatePath('/dashboard/calendar');
+    revalidatePath('/dashboard/appointments');
+    revalidatePath('/dashboard/calendar');
 
-  return {
-    booking: booking as Booking,
-    service: {
-      name: service.name,
-      durationMin: service.durationMin,
-      priceCents: service.priceCents,
-    },
-  };
-}
-
-// Get staff members with their services for the appointment form
-export async function getStaffForAppointmentForm() {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
-
-  if (!session?.session.activeOrganizationId) {
-    throw new Error('No active organization');
-  }
-
-  const organizationId = session.session.activeOrganizationId;
-
-  // Get all members
-  const members = await auth.api.listMembers({
-    headers: requestHeaders,
-    query: { organizationId },
-  });
-
-  // Get member services
-  const memberServices = await db
-    .selectFrom('memberServices')
-    .select(['memberId', 'serviceId'])
-    .execute();
-
-  // Map members with their services
-  const staffWithServices = members?.members?.map((member) => ({
-    id: member.id,
-    name: member.user.name,
-    email: member.user.email,
-    role: member.role,
-    serviceIds: memberServices
-      .filter((ms) => ms.memberId === member.id)
-      .map((ms) => ms.serviceId),
-  })) || [];
-
-  return staffWithServices;
-}
+    return ok({
+      booking: booking as Booking,
+      service: {
+        name: service.name,
+        durationMin: service.durationMin,
+        priceCents: service.priceCents,
+      },
+    });
+  },
+});
