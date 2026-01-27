@@ -4,14 +4,15 @@ import { getStaffCount } from '@/actions/member-services';
 import { CalendarDays, Clock, Scissors, Users } from 'lucide-react';
 
 export async function DashboardStats() {
-  const [bookingStatsResult, serviceCountResult, staffCount] = await Promise.all([
+  const [bookingStatsResult, serviceCountResult, staffCountResult] = await Promise.all([
     getBookingStats({}),
     getServiceCount({}),
-    getStaffCount(),
+    getStaffCount({}),
   ]);
 
   const bookingStats = bookingStatsResult.success ? bookingStatsResult.data : { pending: 0, confirmed: 0, today: 0 };
   const serviceCount = serviceCountResult.success ? serviceCountResult.data : 0;
+  const staffCount = staffCountResult.success ? staffCountResult.data : 0;
 
   const stats = [
     {

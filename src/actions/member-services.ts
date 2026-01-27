@@ -1,82 +1,90 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db/db';
-import { Selectable, Insertable } from 'kysely';
-import { MemberServices } from '@/types/db';
 import { auth } from '@/lib/auth';
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import { createSafeAction, ok, err } from '@/lib/safe-action';
 
-async function getActiveOrganizationId(): Promise<string> {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({ headers: requestHeaders });
+// ============ Schemas ============
 
-  if (!session?.session.activeOrganizationId) {
-    throw new Error('No active organization');
-  }
+const getMemberServicesSchema = z.object({
+  memberId: z.uuid(),
+});
 
-  return session.session.activeOrganizationId;
-}
+const assignServicesToMemberSchema = z.object({
+  memberId: z.uuid(),
+  serviceIds: z.array(z.uuid()),
+});
 
-export async function getMemberServices(memberId: string): Promise<string[]> {
-  const memberServices = await db
-    .selectFrom('memberServices')
-    .select(['serviceId'])
-    .where('memberId', '=', memberId)
-    .execute();
+// ============ Read Operations ============
 
-  return memberServices.map((ms) => ms.serviceId);
-}
-
-export async function assignServicesToMember(
-  memberId: string,
-  serviceIds: string[]
-) {
-  const organizationId = await getActiveOrganizationId();
-
-  // Verify member belongs to this org
-  const requestHeaders = await headers();
-  const members = await auth.api.listMembers({
-    headers: requestHeaders,
-    query: { organizationId },
-  });
-
-  const member = members?.members?.find((m) => m.id === memberId);
-  if (!member) {
-    throw new Error('Member not found in your organization');
-  }
-
-  // Delete existing assignments for this member
-  await db
-    .deleteFrom('memberServices')
-    .where('memberId', '=', memberId)
-    .execute();
-
-  // Insert new assignments
-  if (serviceIds.length > 0) {
-    await db
-      .insertInto('memberServices')
-      .values(
-        serviceIds.map((serviceId) => ({
-          memberId,
-          serviceId,
-        }))
-      )
+export const getMemberServices = createSafeAction({
+  schema: getMemberServicesSchema,
+  requireAuth: false, // This is called from public booking pages
+  handler: async ({ data }) => {
+    const memberServices = await db
+      .selectFrom('memberServices')
+      .select(['serviceId'])
+      .where('memberId', '=', data.memberId)
       .execute();
-  }
 
-  revalidatePath('/dashboard/owner/staff');
-  return { success: true };
-}
+    return ok(memberServices.map((ms) => ms.serviceId));
+  },
+});
 
-export async function getStaffCount() {
-  const organizationId = await getActiveOrganizationId();
-  const requestHeaders = await headers();
+export const getStaffCount = createSafeAction({
+  handler: async ({ ctx }) => {
+    const requestHeaders = await headers();
 
-  const members = await auth.api.listMembers({
-    headers: requestHeaders,
-    query: { organizationId },
-  });
+    const members = await auth.api.listMembers({
+      headers: requestHeaders,
+      query: { organizationId: ctx.organizationId },
+    });
 
-  return members?.members?.length || 0;
-}
+    return ok(members?.members?.length || 0);
+  },
+});
+
+// ============ Write Operations ============
+
+export const assignServicesToMember = createSafeAction({
+  schema: assignServicesToMemberSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
+    // Verify member belongs to this org
+    const requestHeaders = await headers();
+    const members = await auth.api.listMembers({
+      headers: requestHeaders,
+      query: { organizationId: ctx.organizationId },
+    });
+
+    const member = members?.members?.find((m) => m.id === data.memberId);
+    if (!member) {
+      return err('Member not found in your organization', 'NOT_FOUND');
+    }
+
+    // Delete existing assignments for this member
+    await db
+      .deleteFrom('memberServices')
+      .where('memberId', '=', data.memberId)
+      .execute();
+
+    // Insert new assignments
+    if (data.serviceIds.length > 0) {
+      await db
+        .insertInto('memberServices')
+        .values(
+          data.serviceIds.map((serviceId) => ({
+            memberId: data.memberId,
+            serviceId,
+          }))
+        )
+        .execute();
+    }
+
+    revalidatePath('/dashboard/owner/staff');
+    return ok({ success: true });
+  },
+});

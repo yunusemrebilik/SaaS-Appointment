@@ -30,15 +30,16 @@ export function ServiceAssignment({ memberId, services }: ServiceAssignmentProps
   // Load current assignments
   useEffect(() => {
     async function load() {
-      try {
-        const assigned = await getMemberServices(memberId);
-        setSelectedServices(assigned);
-        setInitialServices(assigned);
-      } catch (error) {
-        console.error('Error loading services:', error);
-      } finally {
-        setLoading(false);
+      const result = await getMemberServices({ memberId });
+      setLoading(false);
+
+      if (!result.success) {
+        toast.error(result.error);
+        return;
       }
+
+      setSelectedServices(result.data);
+      setInitialServices(result.data);
     }
     load();
   }, [memberId]);
@@ -57,17 +58,17 @@ export function ServiceAssignment({ memberId, services }: ServiceAssignmentProps
 
   async function handleSave() {
     setSaving(true);
-    try {
-      await assignServicesToMember(memberId, selectedServices);
-      setInitialServices(selectedServices);
-      toast.success('Services updated');
-      router.refresh();
-    } catch (error) {
-      console.error('Error saving services:', error);
-      toast.error('Failed to update services');
-    } finally {
-      setSaving(false);
+    const result = await assignServicesToMember({ memberId, serviceIds: selectedServices });
+    setSaving(false);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
     }
+
+    setInitialServices(selectedServices);
+    toast.success('Services updated');
+    router.refresh();
   }
 
   if (loading) {
@@ -98,8 +99,8 @@ export function ServiceAssignment({ memberId, services }: ServiceAssignmentProps
               type="button"
               onClick={() => toggleService(service.id)}
               className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${isSelected
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80'
                 }`}
             >
               {isSelected && <Check className="h-3 w-3" />}
