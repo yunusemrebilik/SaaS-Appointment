@@ -19,7 +19,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { useAutoSlug } from '@/lib/hooks/useAutoSlug';
+import { useAutoSlug } from '@/hooks/use-auto-slug';
 
 // Helper to slugify text
 const generateSlug = (text: string) =>
