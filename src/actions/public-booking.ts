@@ -7,6 +7,7 @@ import { Booking, BookingStatus } from '@/types/booking';
 import { createSafeAction, ok, err } from '@/lib/safe-action';
 import { z } from 'zod';
 import { getAvailableSlots as getAvailableSlotsService } from '@/lib/services/availability';
+import { normalizePhone } from '@/lib/phone';
 
 export type Organization = Selectable<Organizations>;
 export type Service = Selectable<Services>;
@@ -105,11 +106,6 @@ export const getAvailableSlots = createSafeAction({
 
 // ============ Booking Creation ============
 
-// Helper locally
-function normalizePhone(phone: string): string {
-  return phone.replace(/\D/g, '');
-}
-
 export const createPublicBooking = createSafeAction({
   schema: createBookingSchema,
   requireAuth: false,
@@ -117,19 +113,16 @@ export const createPublicBooking = createSafeAction({
     const { organizationId, serviceId, startTime, customerName, customerPhone, notes } = data;
     let { memberId } = data;
 
-    // Normalize phone for ban check
+    // Normalize phone for ban check and storage
     const normalizedPhone = normalizePhone(customerPhone);
 
-    // Check if customer is banned
-    const bannedCustomers = await db
+    // Check if customer is banned (direct DB query - phones are stored normalized)
+    const banMatch = await db
       .selectFrom('bannedCustomers')
-      .select(['customerPhone', 'reason', 'bannedUntil'])
+      .select(['reason', 'bannedUntil'])
       .where('organizationId', '=', organizationId)
-      .execute();
-
-    const banMatch = bannedCustomers.find(
-      (b) => normalizePhone(b.customerPhone) === normalizedPhone
-    );
+      .where('customerPhone', '=', normalizedPhone)
+      .executeTakeFirst();
 
     if (banMatch) {
       if (!banMatch.bannedUntil || new Date(banMatch.bannedUntil) > new Date()) {
@@ -180,7 +173,7 @@ export const createPublicBooking = createSafeAction({
           startTime,
           endTime,
           customerName,
-          customerPhone,
+          customerPhone: normalizedPhone,
           notes: notes || null,
           priceAtBooking: service.priceCents,
           status: 'pending',

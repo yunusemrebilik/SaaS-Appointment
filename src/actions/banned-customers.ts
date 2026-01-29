@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { createSafeAction, ok, err } from '@/lib/safe-action';
 import { Selectable } from 'kysely';
 import { BannedCustomers } from '@/types/db';
+import { normalizePhone } from '@/lib/phone';
 
 export type BannedCustomer = Selectable<BannedCustomers>;
 
@@ -46,11 +47,12 @@ export const isCustomerBanned = createSafeAction({
   schema: isCustomerBannedSchema,
   requireAuth: false, // This is called from public booking pages
   handler: async ({ data }) => {
+    const normalizedPhone = normalizePhone(data.customerPhone);
     const ban = await db
       .selectFrom('bannedCustomers')
       .select(['reason', 'bannedUntil'])
       .where('organizationId', '=', data.organizationId)
-      .where('customerPhone', '=', data.customerPhone)
+      .where('customerPhone', '=', normalizedPhone)
       .executeTakeFirst();
 
     if (!ban) {
@@ -76,12 +78,14 @@ export const banCustomer = createSafeAction({
   schema: banCustomerSchema,
   requireRole: ['owner', 'admin'],
   handler: async ({ data, ctx }) => {
+    const normalizedPhone = normalizePhone(data.customerPhone);
+
     // Check if already banned
     const existing = await db
       .selectFrom('bannedCustomers')
       .select(['id'])
       .where('organizationId', '=', ctx.organizationId)
-      .where('customerPhone', '=', data.customerPhone)
+      .where('customerPhone', '=', normalizedPhone)
       .executeTakeFirst();
 
     if (existing) {
@@ -102,7 +106,7 @@ export const banCustomer = createSafeAction({
         .insertInto('bannedCustomers')
         .values({
           organizationId: ctx.organizationId,
-          customerPhone: data.customerPhone,
+          customerPhone: normalizedPhone,
           reason: data.reason || null,
           bannedUntil: data.bannedUntil || null,
         })

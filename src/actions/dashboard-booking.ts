@@ -7,6 +7,7 @@ import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { createSafeAction, ok, err } from '@/lib/safe-action';
 import { Booking, BookingStatus } from '@/types/booking';
+import { normalizePhone } from '@/lib/phone';
 
 // ============ Schemas ============
 
@@ -98,7 +99,7 @@ export const createDashboardBooking = createSafeAction({
         startTime: data.startTime,
         endTime,
         customerName: data.customerName,
-        customerPhone: data.customerPhone,
+        customerPhone: normalizePhone(data.customerPhone),
         notes: data.notes || null,
         priceAtBooking: service.priceCents,
         status: 'confirmed', // Dashboard bookings are auto-confirmed
