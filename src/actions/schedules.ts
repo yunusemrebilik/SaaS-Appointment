@@ -140,6 +140,10 @@ export const createOverride = createSafeAction({
       return err('Member ID is required', 'INVALID_INPUT');
     }
 
+    if (ctx.role === 'member' && memberId !== ctx.memberId) {
+      return err('Not authorized to access this schedule', 'FORBIDDEN');
+    }
+
     const result = await db
       .insertInto('memberScheduleOverrides')
       .values({

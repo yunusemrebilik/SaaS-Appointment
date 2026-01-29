@@ -4,38 +4,74 @@ import { db } from '@/db/db';
 import { Selectable } from 'kysely';
 import { Organizations, Services, MemberWeeklySchedules, MemberScheduleOverrides } from '@/types/db';
 import { Booking, BookingStatus } from '@/types/booking';
+import { createSafeAction, ok, err } from '@/lib/safe-action';
+import { z } from 'zod';
+import { getAvailableSlots as getAvailableSlotsService } from '@/lib/services/availability';
 
 export type Organization = Selectable<Organizations>;
 export type Service = Selectable<Services>;
 export type WeeklySchedule = Selectable<MemberWeeklySchedules>;
 export type ScheduleOverride = Selectable<MemberScheduleOverrides>;
 
+// ============ Schemas ============
+
+const getOrganizationSchema = z.string();
+const getServicesSchema = z.string();
+
+const getSlotsSchema = z.object({
+  organizationId: z.string(),
+  serviceId: z.string(),
+  memberId: z.string().optional(),
+  date: z.coerce.date(), // Accepts Date objects or ISO strings
+});
+
+const createBookingSchema = z.object({
+  organizationId: z.string(),
+  serviceId: z.string(),
+  memberId: z.string().optional(),
+  startTime: z.coerce.date(), // Accepts Date objects or ISO strings
+  customerName: z.string().min(1, 'Name is required'),
+  customerPhone: z.string().min(10, 'Valid phone number is required'),
+  notes: z.string().optional(),
+});
+
 // ============ Public Data Fetching ============
 
-export async function getOrganizationBySlug(slug: string): Promise<Organization | null> {
-  const organization = await db
-    .selectFrom('organizations')
-    .selectAll()
-    .where('slug', '=', slug)
-    .executeTakeFirst();
+export const getOrganizationBySlug = createSafeAction({
+  schema: getOrganizationSchema,
+  requireAuth: false,
+  handler: async ({ data: slug }) => {
+    const organization = await db
+      .selectFrom('organizations')
+      .selectAll()
+      .where('slug', '=', slug)
+      .executeTakeFirst();
 
-  return organization || null;
-}
+    if (!organization) return err('Organization not found', 'NOT_FOUND');
+    return ok(organization);
+  }
+});
 
-export async function getPublicServices(organizationId: string): Promise<Service[]> {
-  const services = await db
-    .selectFrom('services')
-    .selectAll()
-    .where('organizationId', '=', organizationId)
-    .where('isActive', '=', true)
-    .orderBy('name', 'asc')
-    .execute();
+export const getPublicServices = createSafeAction({
+  schema: getServicesSchema,
+  requireAuth: false,
+  handler: async ({ data: organizationId }) => {
+    const services = await db
+      .selectFrom('services')
+      .selectAll()
+      .where('organizationId', '=', organizationId)
+      .where('isActive', '=', true)
+      .orderBy('name', 'asc')
+      .execute();
 
-  return services;
-}
+    return ok(services);
+  }
+});
 
+// ============ Time Slot Generation ============
+
+// Keep this helper exported for UI if needed, or internal
 export async function getAvailableStaff(organizationId: string, serviceId: string) {
-  // Get members who offer this service
   const staffWithService = await db
     .selectFrom('memberServices')
     .innerJoin('members', 'members.id', 'memberServices.memberId')
@@ -52,332 +88,120 @@ export async function getAvailableStaff(organizationId: string, serviceId: strin
   return staffWithService;
 }
 
-// ============ Time Slot Generation ============
-
-interface SlotParams {
-  organizationId: string;
-  serviceId: string;
-  memberId?: string;
-  date: Date;
-}
-
-export async function getAvailableSlots(params: SlotParams) {
-  const { organizationId, serviceId, memberId, date } = params;
-
-  // Get service duration
-  const service = await db
-    .selectFrom('services')
-    .select(['durationMin'])
-    .where('id', '=', serviceId)
-    .executeTakeFirst();
-
-  if (!service) {
-    return [];
-  }
-
-  const duration = service.durationMin;
-  const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
-
-  // Get the date boundaries for querying
-  const dayStart = new Date(date);
-  dayStart.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(date);
-  dayEnd.setHours(23, 59, 59, 999);
-
-  // If a specific member is selected, get their availability
-  // Otherwise, get all members who can perform this service
-  let memberIds: string[] = [];
-
-  if (memberId) {
-    memberIds = [memberId];
-  } else {
-    const staff = await getAvailableStaff(organizationId, serviceId);
-    memberIds = staff.map((s) => s.memberId);
-  }
-
-  if (memberIds.length === 0) {
-    return [];
-  }
-
-  // Batch-fetch all data upfront to avoid N+1 queries
-  const [allSchedules, allOverrides, allBookings] = await Promise.all([
-    db.selectFrom('memberWeeklySchedules')
-      .select(['memberId', 'startTime', 'endTime'])
-      .where('memberId', 'in', memberIds)
-      .where('dayOfWeek', '=', dayOfWeek)
-      .execute(),
-    db.selectFrom('memberScheduleOverrides')
-      .selectAll()
-      .where('memberId', 'in', memberIds)
-      .where('date', '>=', dayStart)
-      .where('date', '<=', dayEnd)
-      .execute(),
-    db.selectFrom('bookings')
-      .select(['memberId', 'startTime', 'endTime'])
-      .where('memberId', 'in', memberIds)
-      .where('startTime', '>=', dayStart)
-      .where('endTime', '<=', dayEnd)
-      .where('status', 'in', ['pending', 'confirmed'])
-      .execute(),
-  ]);
-
-  // Collect all available slots across all relevant members
-  const allSlots: { time: string; memberId: string }[] = [];
-
-  for (const mId of memberIds) {
-    const memberSchedules = allSchedules.filter((s) => s.memberId === mId);
-    const memberOverrides = allOverrides.filter((o) => o.memberId === mId);
-    const memberBookings = allBookings.filter((b) => b.memberId === mId);
-
-    const memberSlots = computeMemberSlots(
-      memberSchedules,
-      memberOverrides,
-      memberBookings,
-      dayStart,
-      duration
-    );
-
-    memberSlots.forEach((time) => {
-      allSlots.push({ time, memberId: mId });
+export const getAvailableSlots = createSafeAction({
+  schema: getSlotsSchema,
+  requireAuth: false,
+  handler: async ({ data }) => {
+    const slots = await getAvailableSlotsService({
+      organizationId: data.organizationId,
+      serviceId: data.serviceId,
+      memberId: data.memberId,
+      date: data.date,
     });
+
+    return ok(slots);
   }
-
-  // Deduplicate slots by time (for "Any Available" we just need unique times)
-  if (!memberId) {
-    const uniqueTimes = [...new Set(allSlots.map((s) => s.time))];
-    return uniqueTimes.sort().map((time) => ({ time, memberId: null }));
-  }
-
-  return allSlots.sort((a, b) => a.time.localeCompare(b.time));
-}
-
-// Pure function: computes slots from pre-fetched data (no DB calls)
-function computeMemberSlots(
-  schedules: { startTime: string; endTime: string }[],
-  overrides: { type: string; startTime: string | null; endTime: string | null }[],
-  bookings: { startTime: Date; endTime: Date }[],
-  dayStart: Date,
-  serviceDuration: number
-): string[] {
-  if (schedules.length === 0) {
-    return []; // Member doesn't work this day
-  }
-
-  // If there's a day_off override, no slots available
-  const hasDayOff = overrides.some((o) => o.type === 'day_off');
-  if (hasDayOff) {
-    return [];
-  }
-
-  const slots: string[] = [];
-
-  for (const schedule of schedules) {
-    const [startHour, startMin] = schedule.startTime.split(':').map(Number);
-    const [endHour, endMin] = schedule.endTime.split(':').map(Number);
-
-    let currentMinutes = startHour * 60 + startMin;
-    const endMinutes = endHour * 60 + endMin;
-
-    while (currentMinutes + serviceDuration <= endMinutes) {
-      const slotHour = Math.floor(currentMinutes / 60);
-      const slotMin = currentMinutes % 60;
-      const slotTime = `${slotHour.toString().padStart(2, '0')}:${slotMin.toString().padStart(2, '0')}`;
-
-      // Check if this slot conflicts with existing bookings
-      const slotStart = new Date(dayStart);
-      slotStart.setHours(slotHour, slotMin, 0, 0);
-      const slotEnd = new Date(slotStart);
-      slotEnd.setMinutes(slotEnd.getMinutes() + serviceDuration);
-
-      const hasConflict = bookings.some((booking) => {
-        const bookingStart = new Date(booking.startTime);
-        const bookingEnd = new Date(booking.endTime);
-        return slotStart < bookingEnd && slotEnd > bookingStart;
-      });
-
-      // Check time_off overrides
-      const hasTimeOffConflict = overrides
-        .filter((o) => o.type === 'time_off' && o.startTime && o.endTime)
-        .some((o) => {
-          const [offStartH, offStartM] = o.startTime!.split(':').map(Number);
-          const [offEndH, offEndM] = o.endTime!.split(':').map(Number);
-          const offStartMinutes = offStartH * 60 + offStartM;
-          const offEndMinutes = offEndH * 60 + offEndM;
-          const slotStartMinutes = slotHour * 60 + slotMin;
-          const slotEndMinutes = slotStartMinutes + serviceDuration;
-          return slotStartMinutes < offEndMinutes && slotEndMinutes > offStartMinutes;
-        });
-
-      if (!hasConflict && !hasTimeOffConflict) {
-        slots.push(slotTime);
-      }
-
-      // Move to next slot based on service duration
-      currentMinutes += serviceDuration;
-    }
-  }
-
-  return slots;
-}
+});
 
 // ============ Booking Creation ============
 
-interface CreateBookingParams {
-  organizationId: string;
-  serviceId: string;
-  memberId?: string;
-  startTime: Date;
-  customerName: string;
-  customerPhone: string;
-  notes?: string;
-}
-
-// Helper to normalize phone numbers for comparison (removes all non-digit chars)
+// Helper locally
 function normalizePhone(phone: string): string {
   return phone.replace(/\D/g, '');
 }
 
-export type CreateBookingResult =
-  | { success: true; booking: Booking; service: { name: string; durationMin: number; priceCents: number } }
-  | { success: false; error: string };
+export const createPublicBooking = createSafeAction({
+  schema: createBookingSchema,
+  requireAuth: false,
+  handler: async ({ data }) => {
+    const { organizationId, serviceId, startTime, customerName, customerPhone, notes } = data;
+    let { memberId } = data;
 
-export async function createPublicBooking(params: CreateBookingParams): Promise<CreateBookingResult> {
-  const { organizationId, serviceId, startTime, customerName, customerPhone, notes } = params;
-  let { memberId } = params;
+    // Normalize phone for ban check
+    const normalizedPhone = normalizePhone(customerPhone);
 
-  // Normalize phone for ban check
-  const normalizedPhone = normalizePhone(customerPhone);
+    // Check if customer is banned
+    const bannedCustomers = await db
+      .selectFrom('bannedCustomers')
+      .select(['customerPhone', 'reason', 'bannedUntil'])
+      .where('organizationId', '=', organizationId)
+      .execute();
 
-  // Check if customer is banned - get all banned phones and compare normalized
-  const bannedCustomers = await db
-    .selectFrom('bannedCustomers')
-    .select(['customerPhone', 'reason', 'bannedUntil'])
-    .where('organizationId', '=', organizationId)
-    .execute();
+    const banMatch = bannedCustomers.find(
+      (b) => normalizePhone(b.customerPhone) === normalizedPhone
+    );
 
-  const banMatch = bannedCustomers.find(
-    (b) => normalizePhone(b.customerPhone) === normalizedPhone
-  );
-
-  if (banMatch) {
-    // Check if ban has expired
-    if (!banMatch.bannedUntil || new Date(banMatch.bannedUntil) > new Date()) {
-      return { success: false, error: 'Using this phone number for booking is currently restricted.' };
-    }
-  }
-
-  // Get service details
-  const service = await db
-    .selectFrom('services')
-    .select(['durationMin', 'priceCents', 'name'])
-    .where('id', '=', serviceId)
-    .executeTakeFirst();
-
-  if (!service) {
-    return { success: false, error: 'Service not found' };
-  }
-
-  // Calculate end time
-  const endTime = new Date(startTime);
-  endTime.setMinutes(endTime.getMinutes() + service.durationMin);
-
-  // If no specific member selected, pick one who can do the service and is available
-  if (!memberId) {
-    const staff = await getAvailableStaff(organizationId, serviceId);
-    if (staff.length === 0) {
-      return { success: false, error: 'No staff available for this service' };
-    }
-
-    const memberIds = staff.map((s) => s.memberId);
-    const dayOfWeek = startTime.getDay();
-    const dayStart = new Date(startTime);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(startTime);
-    dayEnd.setHours(23, 59, 59, 999);
-
-    // Batch-fetch availability data for all staff
-    const [allSchedules, allOverrides, allBookings] = await Promise.all([
-      db.selectFrom('memberWeeklySchedules')
-        .select(['memberId', 'startTime', 'endTime'])
-        .where('memberId', 'in', memberIds)
-        .where('dayOfWeek', '=', dayOfWeek)
-        .execute(),
-      db.selectFrom('memberScheduleOverrides')
-        .selectAll()
-        .where('memberId', 'in', memberIds)
-        .where('date', '>=', dayStart)
-        .where('date', '<=', dayEnd)
-        .execute(),
-      db.selectFrom('bookings')
-        .select(['memberId', 'startTime', 'endTime'])
-        .where('memberId', 'in', memberIds)
-        .where('startTime', '>=', dayStart)
-        .where('endTime', '<=', dayEnd)
-        .where('status', 'in', ['pending', 'confirmed'])
-        .execute(),
-    ]);
-
-    const slotTime = `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}`;
-
-    // Find a staff member who is available at this time
-    for (const s of staff) {
-      const memberSchedules = allSchedules.filter((sch) => sch.memberId === s.memberId);
-      const memberOverrides = allOverrides.filter((o) => o.memberId === s.memberId);
-      const memberBookings = allBookings.filter((b) => b.memberId === s.memberId);
-
-      const slots = computeMemberSlots(
-        memberSchedules,
-        memberOverrides,
-        memberBookings,
-        dayStart,
-        service.durationMin
-      );
-
-      if (slots.includes(slotTime)) {
-        memberId = s.memberId;
-        break;
+    if (banMatch) {
+      if (!banMatch.bannedUntil || new Date(banMatch.bannedUntil) > new Date()) {
+        return err('Using this phone number for booking is currently restricted.', 'BANNED');
       }
     }
 
-    if (!memberId) {
-      return { success: false, error: 'No staff available at this time' };
-    }
-  }
+    // Get service details
+    const service = await db
+      .selectFrom('services')
+      .select(['durationMin', 'priceCents', 'name'])
+      .where('id', '=', serviceId)
+      .executeTakeFirst();
 
-  // Create the booking - the Postgres EXCLUDE constraint prevents double-bookings
-  try {
-    const booking = await db
-      .insertInto('bookings')
-      .values({
+    if (!service) {
+      return err('Service not found', 'NOT_FOUND');
+    }
+
+    const endTime = new Date(startTime);
+    endTime.setMinutes(endTime.getMinutes() + service.durationMin);
+
+    // Auto-assign member if not provided
+    if (!memberId) {
+      // Re-use logic: check availability for "any" using the SERVICE directly
+      const slots = await getAvailableSlotsService({
         organizationId,
         serviceId,
-        memberId,
-        startTime,
-        endTime,
-        customerName,
-        customerPhone,
-        notes: notes || null,
-        priceAtBooking: service.priceCents,
-        status: 'pending',
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
+        memberId: undefined, // check all
+        date: startTime, // optimize: this fetches whole day
+      });
 
-    return {
-      success: true,
-      booking: booking as Booking,
-      service: {
-        name: service.name,
-        durationMin: service.durationMin,
-        priceCents: service.priceCents,
-      },
-    };
-  } catch (error: unknown) {
-    // Handle the exclusion constraint violation (overlapping bookings)
-    if (error instanceof Error && error.message.includes('no_overlapping_bookings')) {
-      return { success: false, error: 'This time slot is no longer available. Please choose another time.' };
+      const timeStr = `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}`;
+      const relevantSlot = slots.find(s => s.time === timeStr);
+
+      if (!relevantSlot) {
+        return err('No staff available at this time', 'UNAVAILABLE');
+      }
+      memberId = relevantSlot.memberId;
     }
-    // Re-throw unexpected errors
-    throw error;
+
+    try {
+      const booking = await db
+        .insertInto('bookings')
+        .values({
+          organizationId,
+          serviceId,
+          memberId: memberId!, // exact member determined above
+          startTime,
+          endTime,
+          customerName,
+          customerPhone,
+          notes: notes || null,
+          priceAtBooking: service.priceCents,
+          status: 'pending',
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      return ok({
+        booking: booking as Booking,
+        service: {
+          name: service.name,
+          durationMin: service.durationMin,
+          priceCents: service.priceCents,
+        },
+      });
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message.includes('no_overlapping_bookings')) {
+        return err('This time slot is no longer available. Please choose another time.', 'CONFLICT');
+      }
+      throw error;
+    }
   }
-}
+});
+

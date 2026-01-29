@@ -37,7 +37,8 @@ export function DateTimeSelect({
 }: DateTimeSelectProps) {
   const [availableDays] = useState<Date[]>(() => getNextDays(30));
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [slots, setSlots] = useState<Awaited<ReturnType<typeof getAvailableSlots>>>([]);
+  // We want the inner data type (TimeSlot[])
+  const [slots, setSlots] = useState<{ time: string; memberId: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [weekOffset, setWeekOffset] = useState(0);
 
@@ -56,9 +57,15 @@ export function DateTimeSelect({
           organizationId,
           serviceId,
           memberId: memberId || undefined,
-          date: selectedDate!,
+          date: selectedDate!, // z.coerce.date() accepts Date objects
         });
-        setSlots(result);
+
+        if (result.success) {
+          setSlots(result.data);
+        } else {
+          console.error('Error fetching slots:', result.error);
+          setSlots([]);
+        }
       } catch (error) {
         console.error('Error fetching slots:', error);
         setSlots([]);

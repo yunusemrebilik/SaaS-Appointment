@@ -70,7 +70,7 @@ export function CustomerForm({
       }
 
       toast.success('Booking confirmed!');
-      onSubmit(data.name, data.phone, result.booking.id);
+      onSubmit(data.name, data.phone, result.data.booking.id);
     } catch (error: any) {
       console.error('Booking error:', error);
       toast.error('An unexpected error occurred. Please try again.');

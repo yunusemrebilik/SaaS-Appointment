@@ -10,13 +10,21 @@ interface BookingPageProps {
 export default async function BookingPage({ params }: BookingPageProps) {
   const { slug } = await params;
 
-  const organization = await getOrganizationBySlug(slug);
+  const organizationResult = await getOrganizationBySlug(slug);
 
-  if (!organization) {
+  if (!organizationResult.success) {
     notFound();
   }
 
-  const services = await getPublicServices(organization.id);
+  const organization = organizationResult.data;
+
+  const servicesResult = await getPublicServices(organization.id);
+
+  if (!servicesResult.success) {
+    notFound();
+  }
+
+  const services = servicesResult.data;
 
   return (
     <div className="min-h-screen py-8 px-4">
