@@ -17,10 +17,24 @@ import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as React from 'react';
 import { toast } from 'sonner';
-import { registerFormSchema } from '@/schemas/registerForm.schema';
-import type { RegisterFormData } from '@/schemas/registerForm.schema';
 import { authClient } from '@/lib/auth-client';
 import { useRouter, useSearchParams } from 'next/navigation';
+import * as z from 'zod';
+
+const registerFormSchema = z.object({
+  ownerName: z.string().min(1, 'Name of the shop owner is required'),
+  email: z.email('Invalid email'),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(100, 'Password must be at most 100 characters')
+    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+    .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
+    .regex(/[0-9]/, 'Password must contain at least one number')
+    .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character'),
+});
+
+type RegisterFormData = z.infer<typeof registerFormSchema>;
 
 export function RegisterForm() {
   const [loading, setLoading] = React.useState(false);

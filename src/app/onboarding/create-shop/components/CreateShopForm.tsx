@@ -7,8 +7,19 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, Store, Upload, RotateCcw } from 'lucide-react';
 import { authClient } from '@/lib/auth-client';
-import { createShopFormSchema, type CreateShopFormData } from '@/schemas/createShopForm.schema';
 import { Button } from '@/components/ui/button';
+import * as z from 'zod';
+
+const createShopFormSchema = z.object({
+  name: z.string().min(1, 'Shop name is required'),
+  slug: z
+    .string()
+    .min(1, 'Shop slug is required')
+    .regex(/^[a-z0-9-]+$/, 'Slug can only contain lowercase letters, numbers, and dashes'),
+  logo: z.any().optional(),
+});
+
+type CreateShopFormData = z.infer<typeof createShopFormSchema>;
 import { Input } from '@/components/ui/input';
 import {
   Card,

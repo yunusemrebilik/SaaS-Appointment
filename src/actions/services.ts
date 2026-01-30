@@ -4,8 +4,11 @@ import { z } from 'zod';
 import { db } from '@/db/db';
 import { revalidatePath } from 'next/cache';
 import { createSafeAction, ok, err, type ActionResult } from '@/lib/safe-action';
-import { serviceFormSchema, type ServiceFormData } from '@/schemas/service.schema';
-import type { Service } from '@/schemas/service.schema';
+
+
+
+import { serviceFormSchema, type ServiceFormData, type Service } from './services.schema';
+
 
 // ============ Read Operations ============
 

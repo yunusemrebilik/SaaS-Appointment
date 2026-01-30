@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { Selectable } from 'kysely';
+import { Services } from '@/types/db';
 
 export const serviceFormSchema = z.object({
   name: z
@@ -15,15 +17,4 @@ export const serviceFormSchema = z.object({
 
 export type ServiceFormData = z.infer<typeof serviceFormSchema>;
 
-// Database row type
-export interface Service {
-  id: string;
-  organizationId: string;
-  name: string;
-  description: string | null;
-  durationMin: number;
-  priceCents: number;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
+export type Service = Selectable<Services>;

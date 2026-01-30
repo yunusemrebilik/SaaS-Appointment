@@ -18,9 +18,15 @@ import {
 } from '@/components/ui/card';
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { loginFormSchema } from '@/schemas/loginForm.schema';
-import type { LoginFormData } from '@/schemas/loginForm.schema';
 import { authClient } from '@/lib/auth-client';
+import * as z from 'zod';
+
+const loginFormSchema = z.object({
+  email: z.email('Invalid email'),
+  password: z.string().min(1, 'Password is required'),
+});
+
+type LoginFormData = z.infer<typeof loginFormSchema>;
 
 export function LoginForm() {
   const [loading, setLoading] = React.useState(false);

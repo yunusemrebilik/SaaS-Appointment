@@ -18,7 +18,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { serviceFormSchema, type ServiceFormData } from '@/schemas/service.schema';
+import { serviceFormSchema, type ServiceFormData } from '@/actions/services.schema';
 import { createService, updateService } from '@/actions/services';
 
 interface ServiceFormDialogProps {
