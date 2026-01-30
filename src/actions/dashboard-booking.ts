@@ -2,8 +2,6 @@
 
 import { z } from 'zod';
 import { db } from '@/db/db';
-import { auth } from '@/lib/auth';
-import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { createSafeAction, ok, err } from '@/lib/safe-action';
 import { Booking, BookingStatus } from '@/types/booking';
@@ -24,30 +22,26 @@ const createDashboardBookingSchema = z.object({
 
 export const getStaffForAppointmentForm = createSafeAction({
   handler: async ({ ctx }) => {
-    const requestHeaders = await headers();
-
-    // Get all members
-    const members = await auth.api.listMembers({
-      headers: requestHeaders,
-      query: { organizationId: ctx.organizationId },
-    });
-
-    // Get member services
-    const memberServices = await db
-      .selectFrom('memberServices')
-      .select(['memberId', 'serviceId'])
+    // Single query with JOIN and array aggregation instead of separate queries + JS filtering
+    const staffWithServices = await db
+      .selectFrom('members')
+      .innerJoin('users', 'users.id', 'members.userId')
+      .leftJoin('memberServices', 'memberServices.memberId', 'members.id')
+      .select((eb) => [
+        'members.id',
+        'users.name',
+        'users.email',
+        'members.role',
+        eb.fn
+          .coalesce(
+            eb.fn.agg<string[]>('array_agg', ['memberServices.serviceId']).filterWhere('memberServices.serviceId', 'is not', null),
+            eb.val<string[]>([])
+          )
+          .as('serviceIds'),
+      ])
+      .where('members.organizationId', '=', ctx.organizationId)
+      .groupBy(['members.id', 'users.id'])
       .execute();
-
-    // Map members with their services
-    const staffWithServices = members?.members?.map((member) => ({
-      id: member.id,
-      name: member.user.name,
-      email: member.user.email,
-      role: member.role,
-      serviceIds: memberServices
-        .filter((ms) => ms.memberId === member.id)
-        .map((ms) => ms.serviceId),
-    })) || [];
 
     return ok(staffWithServices);
   },

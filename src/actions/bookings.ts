@@ -199,38 +199,51 @@ export const getBookingStats = createSafeAction({
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    let baseQuery = db
+    const todayEnd = new Date(today);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+
+    // Single query with conditional aggregation instead of 3 separate queries
+    let query = db
       .selectFrom('bookings')
+      .select((eb) => [
+        eb.fn
+          .count<number>(
+            eb.case().when('status', '=', 'pending').then(eb.ref('id')).end()
+          )
+          .as('pending'),
+        eb.fn
+          .count<number>(
+            eb.case().when('status', '=', 'confirmed').then(eb.ref('id')).end()
+          )
+          .as('confirmed'),
+        eb.fn
+          .count<number>(
+            eb
+              .case()
+              .when(
+                eb.and([
+                  eb('status', 'in', ['pending', 'confirmed']),
+                  eb('startTime', '<', todayEnd),
+                ])
+              )
+              .then(eb.ref('id'))
+              .end()
+          )
+          .as('today'),
+      ])
       .where('organizationId', '=', ctx.organizationId)
       .where('startTime', '>=', today);
 
     if (ctx.role === 'member' && ctx.memberId) {
-      baseQuery = baseQuery.where('memberId', '=', ctx.memberId);
+      query = query.where('memberId', '=', ctx.memberId);
     }
 
-    const pending = await baseQuery
-      .where('status', '=', 'pending')
-      .select(db.fn.count<number>('id').as('count'))
-      .executeTakeFirst();
-
-    const confirmed = await baseQuery
-      .where('status', '=', 'confirmed')
-      .select(db.fn.count<number>('id').as('count'))
-      .executeTakeFirst();
-
-    const todayEnd = new Date(today);
-    todayEnd.setDate(todayEnd.getDate() + 1);
-
-    const todaysCount = await baseQuery
-      .where('startTime', '<', todayEnd)
-      .where('status', 'in', ['pending', 'confirmed'])
-      .select(db.fn.count<number>('id').as('count'))
-      .executeTakeFirst();
+    const stats = await query.executeTakeFirst();
 
     return ok({
-      pending: Number(pending?.count || 0),
-      confirmed: Number(confirmed?.count || 0),
-      today: Number(todaysCount?.count || 0),
+      pending: Number(stats?.pending || 0),
+      confirmed: Number(stats?.confirmed || 0),
+      today: Number(stats?.today || 0),
     });
   },
 });

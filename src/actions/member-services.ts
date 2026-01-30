@@ -53,14 +53,14 @@ export const assignServicesToMember = createSafeAction({
   schema: assignServicesToMemberSchema,
   requireRole: ['owner', 'admin'],
   handler: async ({ data, ctx }) => {
-    // Verify member belongs to this org
-    const requestHeaders = await headers();
-    const members = await auth.api.listMembers({
-      headers: requestHeaders,
-      query: { organizationId: ctx.organizationId },
-    });
+    // Direct lookup by member ID instead of fetching all members
+    const member = await db
+      .selectFrom('members')
+      .select(['id'])
+      .where('id', '=', data.memberId)
+      .where('organizationId', '=', ctx.organizationId)
+      .executeTakeFirst();
 
-    const member = members?.members?.find((m) => m.id === data.memberId);
     if (!member) {
       return err('Member not found in your organization', 'NOT_FOUND');
     }
