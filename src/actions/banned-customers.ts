@@ -22,11 +22,6 @@ const unbanCustomerSchema = z.object({
   id: z.uuid(),
 });
 
-const isCustomerBannedSchema = z.object({
-  organizationId: z.uuid(),
-  customerPhone: z.string(),
-});
-
 // ============ Read Operations ============
 
 export const getBannedCustomers = createSafeAction({
@@ -43,35 +38,6 @@ export const getBannedCustomers = createSafeAction({
   },
 });
 
-export const isCustomerBanned = createSafeAction({
-  schema: isCustomerBannedSchema,
-  requireAuth: false, // This is called from public booking pages
-  handler: async ({ data }) => {
-    const normalizedPhone = normalizePhone(data.customerPhone);
-    const ban = await db
-      .selectFrom('bannedCustomers')
-      .select(['reason', 'bannedUntil'])
-      .where('organizationId', '=', data.organizationId)
-      .where('customerPhone', '=', normalizedPhone)
-      .executeTakeFirst();
-
-    if (!ban) {
-      return ok({ banned: false });
-    }
-
-    // Check if ban has expired
-    if (ban.bannedUntil && new Date(ban.bannedUntil) < new Date()) {
-      return ok({ banned: false });
-    }
-
-    return ok({
-      banned: true,
-      reason: ban.reason || undefined,
-      bannedUntil: ban.bannedUntil,
-    });
-  },
-});
-
 // ============ Write Operations ============
 
 export const banCustomer = createSafeAction({
@@ -80,38 +46,24 @@ export const banCustomer = createSafeAction({
   handler: async ({ data, ctx }) => {
     const normalizedPhone = normalizePhone(data.customerPhone);
 
-    // Check if already banned
-    const existing = await db
-      .selectFrom('bannedCustomers')
-      .select(['id'])
-      .where('organizationId', '=', ctx.organizationId)
-      .where('customerPhone', '=', normalizedPhone)
-      .executeTakeFirst();
-
-    if (existing) {
-      // Update existing ban
-      await db
-        .updateTable('bannedCustomers')
-        .set({
+    // Single upsert query instead of SELECT + conditional INSERT/UPDATE
+    await db
+      .insertInto('bannedCustomers')
+      .values({
+        organizationId: ctx.organizationId,
+        customerPhone: normalizedPhone,
+        reason: data.reason || null,
+        bannedUntil: data.bannedUntil || null,
+      })
+      .onConflict((oc) =>
+        oc.constraint('uq_banned_customer_org').doUpdateSet({
           reason: data.reason || null,
           bannedUntil: data.bannedUntil || null,
           bannedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where('id', '=', existing.id)
-        .execute();
-    } else {
-      // Create new ban
-      await db
-        .insertInto('bannedCustomers')
-        .values({
-          organizationId: ctx.organizationId,
-          customerPhone: normalizedPhone,
-          reason: data.reason || null,
-          bannedUntil: data.bannedUntil || null,
-        })
-        .execute();
-    }
+      )
+      .execute();
 
     revalidatePath('/dashboard/owner/customers');
     return ok({ success: true });
