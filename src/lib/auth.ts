@@ -3,6 +3,7 @@ import { pool } from '@/db/pool';
 import * as argon2 from 'argon2';
 import { nextCookies } from 'better-auth/next-js';
 import { organization } from 'better-auth/plugins';
+import { env } from '@/env';
 
 export const auth = betterAuth({
   database: pool,
@@ -91,7 +92,7 @@ export const auth = betterAuth({
     organization({
       async sendInvitationEmail(data) {
         // Construct the invitation acceptance link
-        const baseUrl = process.env.SITE_URL || 'http://localhost:3000';
+        const baseUrl = env.BETTER_AUTH_URL;
         const inviteLink = `${baseUrl}/accept-invitation/${data.id}`;
 
         // In production, use a proper email service (Resend, SendGrid, etc.)

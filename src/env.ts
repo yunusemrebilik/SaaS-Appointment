@@ -8,15 +8,12 @@ export const env = createEnv({
     BETTER_AUTH_SECRET: z.string(),
     BETTER_AUTH_URL: z.url(),
     NODE_ENV: z.enum(['development', 'test', 'production']),
+    UPLOADTHING_TOKEN: z.string(),
   },
 
-  client: {
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
-  },
+  client: {},
 
-  experimental__runtimeEnv: {
-    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
-  },
+  experimental__runtimeEnv: {},
 
   emptyStringAsUndefined: true,
 });
