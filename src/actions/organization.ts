@@ -10,7 +10,7 @@ import { createSafeAction, ok, err } from '@/lib/safe-action';
 const updateOrganizationSettingsSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100),
   slug: z.string().min(2, 'Slug must be at least 2 characters').max(50).regex(/^[a-z0-9-]+$/, 'Slug must only contain lowercase letters, numbers, and hyphens'),
-  logo: z.string().url().nullable().optional(),
+  logo: z.url().nullable().optional(),
 });
 
 // ============ Read Operations ============
@@ -55,6 +55,34 @@ export const updateOrganizationSettings = createSafeAction({
         name: data.name,
         slug: data.slug,
         logo: data.logo ?? undefined,
+        updatedAt: new Date(),
+      })
+      .where('id', '=', ctx.organizationId)
+      .returningAll()
+      .executeTakeFirst();
+
+    if (!result) {
+      return err('Organization not found', 'NOT_FOUND');
+    }
+
+    revalidatePath('/dashboard/owner/settings');
+    revalidatePath('/dashboard');
+    return ok(result);
+  },
+});
+
+const updateOrganizationLogoSchema = z.object({
+  logoUrl: z.url().nullable(),
+});
+
+export const updateOrganizationLogo = createSafeAction({
+  schema: updateOrganizationLogoSchema,
+  requireRole: ['owner', 'admin'],
+  handler: async ({ data, ctx }) => {
+    const result = await db
+      .updateTable('organizations')
+      .set({
+        logo: data.logoUrl,
         updatedAt: new Date(),
       })
       .where('id', '=', ctx.organizationId)

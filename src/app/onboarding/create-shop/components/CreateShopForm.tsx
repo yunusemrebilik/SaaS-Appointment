@@ -5,7 +5,8 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, Store, Upload, RotateCcw } from 'lucide-react';
+import { Loader2, Store, RotateCcw, X } from 'lucide-react';
+import Image from 'next/image';
 import { authClient } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
 import * as z from 'zod';
@@ -16,7 +17,7 @@ const createShopFormSchema = z.object({
     .string()
     .min(1, 'Shop slug is required')
     .regex(/^[a-z0-9-]+$/, 'Slug can only contain lowercase letters, numbers, and dashes'),
-  logo: z.any().optional(),
+  logo: z.string().nullable().optional(),
 });
 
 type CreateShopFormData = z.infer<typeof createShopFormSchema>;
@@ -31,6 +32,7 @@ import {
 } from '@/components/ui/card';
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { useAutoSlug } from '@/hooks/use-auto-slug';
+import { UploadButton } from '@/lib/uploadthing-components';
 
 // Helper to slugify text
 const generateSlug = (text: string) =>
@@ -50,8 +52,12 @@ export function CreateShopForm() {
     defaultValues: {
       name: '',
       slug: '',
+      logo: null,
     },
   });
+
+  // Watch the logo field from form state
+  const logoUrl = form.watch('logo');
 
   const autoSlug = useAutoSlug({
     form,
@@ -61,22 +67,19 @@ export function CreateShopForm() {
     debounceMs: 300,
   });
 
+  const handleRemoveLogo = () => {
+    form.setValue('logo', null);
+  };
+
   async function onSubmit(data: CreateShopFormData) {
     setLoading(true);
 
     try {
-      // Handle Logo Upload (Mocked for now)
-      const logoUrl: string | undefined = undefined;
-      if (data.logo && data.logo.length > 0) {
-        // TODO: Upload `data.logo[0]` to S3/UploadThing here
-        console.log('File selected:', data.logo[0].name);
-      }
-
       // Create Organization via Better Auth
       const { data: org, error } = await authClient.organization.create({
         name: data.name,
         slug: data.slug,
-        logo: logoUrl,
+        logo: data.logo ?? undefined,
       });
 
       if (error) {
@@ -197,37 +200,53 @@ export function CreateShopForm() {
             />
 
             {/* Logo Upload */}
-            <Controller
-              name="logo"
-              control={form.control}
-              render={({ field: { onChange, value, ...field } }) => (
-                <Field>
-                  <FieldLabel>Shop Logo (optional)</FieldLabel>
-                  <label
-                    htmlFor="logo-upload"
-                    className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-input rounded-md cursor-pointer bg-background/50 hover:bg-muted/50 hover:border-primary/50 transition-all"
-                  >
-                    <div className="flex flex-col items-center justify-center py-4">
-                      <Upload className="h-5 w-5 text-muted-foreground mb-1" />
-                      <p className="text-sm text-muted-foreground">Click to upload</p>
-                      <p className="text-xs text-muted-foreground">SVG, PNG, JPG (max 2MB)</p>
-                    </div>
-                    <Input
-                      {...field}
-                      id="logo-upload"
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) onChange([file]);
-                      }}
-                      disabled={loading}
-                    />
-                  </label>
-                </Field>
-              )}
-            />
+            <div className="space-y-3">
+              <FieldLabel>Shop Logo (optional)</FieldLabel>
+              <div className="flex items-center gap-4">
+                <div className="relative h-20 w-20 rounded-lg border-2 border-dashed border-muted-foreground/25 flex items-center justify-center overflow-hidden bg-muted/50">
+                  {logoUrl ? (
+                    <>
+                      <Image
+                        src={logoUrl}
+                        alt="Shop logo"
+                        fill
+                        className="object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleRemoveLogo}
+                        className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </>
+                  ) : (
+                    <Store className="h-8 w-8 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="flex-1">
+                  <UploadButton
+                    endpoint="shopLogo"
+                    onClientUploadComplete={(res) => {
+                      if (res?.[0]?.ufsUrl) {
+                        form.setValue('logo', res[0].ufsUrl);
+                        toast.success('Logo uploaded successfully!');
+                      }
+                    }}
+                    onUploadError={(error: Error) => {
+                      toast.error(`Upload failed: ${error.message}`);
+                    }}
+                    appearance={{
+                      button: 'ut-ready:bg-primary ut-uploading:cursor-not-allowed',
+                      allowedContent: 'text-xs text-muted-foreground',
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Recommended: Square image, at least 200x200px
+                  </p>
+                </div>
+              </div>
+            </div>
           </FieldGroup>
         </form>
       </CardContent>

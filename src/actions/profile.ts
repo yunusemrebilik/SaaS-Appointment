@@ -12,7 +12,7 @@ const updateProfileSchema = z.object({
 });
 
 const updateProfileImageSchema = z.object({
-  imageUrl: z.string().url().nullable(),
+  imageUrl: z.url().nullable(),
 });
 
 // ============ Read Operations ============

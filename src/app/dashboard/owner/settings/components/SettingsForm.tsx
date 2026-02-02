@@ -12,7 +12,7 @@ import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { updateOrganizationSettings } from '@/actions/organization';
+import { updateOrganizationSettings, updateOrganizationLogo } from '@/actions/organization';
 import { UploadButton } from '@/lib/uploadthing-components';
 
 const settingsSchema = z.object({
@@ -21,7 +21,6 @@ const settingsSchema = z.object({
     .string()
     .min(2, 'URL must be at least 2 characters')
     .regex(/^[a-z0-9-]+$/, 'URL can only contain lowercase letters, numbers, and hyphens'),
-  logo: z.string().nullable().optional(),
 });
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
@@ -45,7 +44,6 @@ export function SettingsForm({ organization }: SettingsFormProps) {
     defaultValues: {
       name: organization.name,
       slug: organization.slug,
-      logo: organization.logo,
     },
   });
 
@@ -67,9 +65,17 @@ export function SettingsForm({ organization }: SettingsFormProps) {
     }
   }
 
-  const handleRemoveLogo = () => {
+  const handleRemoveLogo = async () => {
+    const result = await updateOrganizationLogo({ logoUrl: null });
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
+    }
+
     setLogoUrl(null);
-    form.setValue('logo', null);
+    toast.success('Logo removed');
+    router.refresh();
   };
 
   return (
@@ -106,21 +112,15 @@ export function SettingsForm({ organization }: SettingsFormProps) {
                 if (res?.[0]?.ufsUrl) {
                   const newLogoUrl = res[0].ufsUrl;
                   setLogoUrl(newLogoUrl);
-                  form.setValue('logo', newLogoUrl);
+                  const result = await updateOrganizationLogo({ logoUrl: newLogoUrl });
 
-                  // Auto-save logo to database
-                  try {
-                    await updateOrganizationSettings({
-                      name: form.getValues('name'),
-                      slug: form.getValues('slug'),
-                      logo: newLogoUrl,
-                    });
-                    toast.success('Logo uploaded and saved!');
-                    router.refresh();
-                  } catch (error) {
-                    console.error('Error saving logo:', error);
-                    toast.error('Logo uploaded but failed to save. Please click Save Changes.');
+                  if (!result.success) {
+                    toast.error(result.error);
+                    return;
                   }
+
+                  toast.success('Logo uploaded!');
+                  router.refresh();
                 }
               }}
               onUploadError={(error: Error) => {
