@@ -1,17 +1,17 @@
 services:
   db:
-    image: postgres
+    image: postgres:18-alpine
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
     environment:
-      POSTGRES_DB: barbersaas_db
-      POSTGRES_USER: barbersaas_user
-      POSTGRES_PASSWORD: barbersaas_password
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
     ports:
-      - '5432:5432'
+      - '${POSTGRES_PORT}:5432'
 
     restart: unless-stopped
 

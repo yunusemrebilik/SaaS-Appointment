@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "format": "prettier --write .",
+    "db:migrate": "NODE_ENV=development tsx src/scripts/migrate.ts",
     "db:codegen": "kysely-codegen --camel-case --out-file src/types/db.ts --dialect postgres",
     "db:clear": "tsx src/scripts/clear-data.ts"
   },
