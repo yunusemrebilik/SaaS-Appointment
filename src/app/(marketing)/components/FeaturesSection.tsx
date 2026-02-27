@@ -3,7 +3,7 @@ import { FeatureCard } from './FeatureCard';
 
 export function FeaturesSection() {
   return (
-    <section className="py-16 pt-12 bg-muted/30">
+    <section id="features" className="py-16 pt-12 bg-muted/30">
       <div className="container px-4 md:px-6">
         <header className="text-center mb-16 space-y-4">
           <h2 className="text-3xl font-bold md:text-4xl">Everything you need to run your shop</h2>

@@ -21,7 +21,7 @@ export default function Navbar() {
           <Link href="#pricing" className="hover:text-primary transition-colors">
             Pricing
           </Link>
-          <Link href="#" className="hover:text-primary transition-colors">
+          <Link href="#about" className="hover:text-primary transition-colors">
             About
           </Link>
         </nav>
