@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizePhone } from './phone';
+import { normalizePhone } from '@/lib/phone';
 
 describe('normalizePhone', () => {
   it('removes spaces from phone number', () => {

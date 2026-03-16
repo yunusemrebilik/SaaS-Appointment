@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeMemberSlots } from './availability';
+import { computeMemberSlots } from '@/lib/services/availability';
 
 describe('Availability Service', () => {
   const baseDate = new Date('2024-01-01T00:00:00Z'); // Monday
